@@ -1,0 +1,14 @@
+{
+  "name": "anathema",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "serve": "python -m http.server 4173 --bind 127.0.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

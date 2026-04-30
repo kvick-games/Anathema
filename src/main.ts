@@ -2,7 +2,9 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createProceduralMusicManager } from "./musicManager.js";
 
-const canvas = document.querySelector("#game");
+const qs = <T extends Element = HTMLElement>(selector: string) => document.querySelector(selector) as T;
+
+const canvas = qs<HTMLCanvasElement>("#game");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
 renderer.shadowMap.enabled = true;
@@ -17,49 +19,49 @@ const clock = new THREE.Clock();
 
 const hud = {
   meters: {
-    hp: document.querySelector("#hp"),
-    stamina: document.querySelector("#stamina"),
-    sanity: document.querySelector("#sanity"),
-    decay: document.querySelector("#decay"),
-    goon: document.querySelector("#goon"),
+    hp: qs("#hp"),
+    stamina: qs("#stamina"),
+    sanity: qs("#sanity"),
+    decay: qs("#decay"),
+    goon: qs("#goon"),
   },
   meterValues: {
-    hp: document.querySelector('[data-value="hp"]'),
-    stamina: document.querySelector('[data-value="stamina"]'),
-    sanity: document.querySelector('[data-value="sanity"]'),
-    decay: document.querySelector('[data-value="decay"]'),
-    goon: document.querySelector('[data-value="goon"]'),
+    hp: qs('[data-value="hp"]'),
+    stamina: qs('[data-value="stamina"]'),
+    sanity: qs('[data-value="sanity"]'),
+    decay: qs('[data-value="decay"]'),
+    goon: qs('[data-value="goon"]'),
   },
-  stats: document.querySelector("#stats"),
-  weapon: document.querySelector("#weapon"),
-  weaponAmmo: document.querySelector("#weapon-ammo"),
-  weaponDetail: document.querySelector("#weapon-detail"),
-  weaponHeat: document.querySelector("#weapon-heat"),
-  message: document.querySelector("#message"),
-  routeProgress: document.querySelector("#route-progress"),
-  death: document.querySelector("#death"),
-  codex: document.querySelector("#codex"),
-  controls: document.querySelector("#controls"),
-  closeCodex: document.querySelector("#close-codex"),
-  closeControls: document.querySelector("#close-controls"),
-  movementBindings: document.querySelector("#movement-bindings"),
-  combatBindings: document.querySelector("#combat-bindings"),
-  controlsMovement: document.querySelector("#controls-movement"),
-  controlsCombat: document.querySelector("#controls-combat"),
-  controlsSystem: document.querySelector("#controls-system"),
-  statHelp: document.querySelector("#stat-help"),
-  characterStats: document.querySelector("#character-stats"),
-  equipmentList: document.querySelector("#equipment-list"),
-  statusList: document.querySelector("#status-list"),
-  upgradeLog: document.querySelector("#upgrade-log"),
-  deckTitle: document.querySelector("#deck-title"),
-  lockStatus: document.querySelector("#lock-status"),
-  lockToggle: document.querySelector("#lock-toggle"),
-  debugCollisionToggle: document.querySelector("#debug-collision-toggle"),
-  combatHud: document.querySelector("#combat-hud"),
-  enemyIndicators: document.querySelector("#enemy-indicators"),
-  radarBlips: document.querySelector("#radar-blips"),
-  quickKitCount: document.querySelector(".quick-slot.active small"),
+  stats: qs("#stats"),
+  weapon: qs("#weapon"),
+  weaponAmmo: qs("#weapon-ammo"),
+  weaponDetail: qs("#weapon-detail"),
+  weaponHeat: qs("#weapon-heat"),
+  message: qs("#message"),
+  routeProgress: qs("#route-progress"),
+  death: qs("#death"),
+  codex: qs("#codex"),
+  controls: qs("#controls"),
+  closeCodex: qs("#close-codex"),
+  closeControls: qs("#close-controls"),
+  movementBindings: qs("#movement-bindings"),
+  combatBindings: qs("#combat-bindings"),
+  controlsMovement: qs("#controls-movement"),
+  controlsCombat: qs("#controls-combat"),
+  controlsSystem: qs("#controls-system"),
+  statHelp: qs("#stat-help"),
+  characterStats: qs("#character-stats"),
+  equipmentList: qs("#equipment-list"),
+  statusList: qs("#status-list"),
+  upgradeLog: qs("#upgrade-log"),
+  deckTitle: qs("#deck-title"),
+  lockStatus: qs("#lock-status"),
+  lockToggle: qs("#lock-toggle"),
+  debugCollisionToggle: qs("#debug-collision-toggle"),
+  combatHud: qs("#combat-hud"),
+  enemyIndicators: qs("#enemy-indicators"),
+  radarBlips: qs("#radar-blips"),
+  quickKitCount: qs(".quick-slot.active small"),
 };
 
 function setHudBar(element, value, max = 100) {
@@ -1886,8 +1888,8 @@ function updateHud() {
     const defeated = Math.max(0, waveHostileCount - enemies.length);
     setHudBar(hud.routeProgress, portalActive ? 100 : defeated, Math.max(1, waveHostileCount));
   }
-  if (hud.quickKitCount) hud.quickKitCount.textContent = player.repairKits;
-  const combatRows = [
+  if (hud.quickKitCount) hud.quickKitCount.textContent = String(player.repairKits);
+  const combatRows: [string, string, number][] = [
     ["LMB", weapon.mode === "rifle" ? "Bayonet" : "Left Weapon", player.attackCd],
     ["RMB", weapon.mode === "folded" ? "Gunblade Fire" : weapon.name, player.shotCd],
     ["Q", "Left Shoulder", player.shoulderCd],
@@ -1903,7 +1905,7 @@ function updateHud() {
       return `<div class="combat-slot ${ready ? "ready" : "cooling"}"><span class="keycap">${inputName}</span><b>${label}</b><em>${value}</em></div>`;
     }).join("");
   }
-  const statPairs = [
+  const statPairs: [string, string | number, number][] = [
     ["AGE", Math.floor(player.age), 80],
     ["STR", player.str, 40],
     ["INT", player.int, 40],

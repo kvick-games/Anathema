@@ -109,6 +109,21 @@ function distortionCurve(amount = 0.35) {
 }
 
 export class ProceduralMusicManager {
+  context: AudioContext | null;
+  seed: number;
+  random: () => number;
+  masterVolume: number;
+  paletteName: string;
+  palette: any;
+  track: any;
+  currentStep: number;
+  nextStepTime: number;
+  scheduler: number | null;
+  started: boolean;
+  muted: boolean;
+  busses: any;
+  noiseBuffer: AudioBuffer | null;
+
   constructor({
     audioContext = null,
     seed = Date.now(),
@@ -172,7 +187,14 @@ export class ProceduralMusicManager {
     this.shapeBusses();
   }
 
-  setIntensity({ danger, density, bpm, drive, chaos, brightness } = {}) {
+  setIntensity({
+    danger,
+    density,
+    bpm,
+    drive,
+    chaos,
+    brightness,
+  }: Partial<Record<"danger" | "density" | "bpm" | "drive" | "chaos" | "brightness", number>> = {}) {
     this.setPalette(this.paletteName, {
       ...this.palette,
       danger: danger ?? this.palette.danger,
@@ -878,7 +900,7 @@ export class ProceduralMusicManager {
   }) {
     const oscillator = this.context.createOscillator();
     const gain = this.context.createGain();
-    const output = filter ? this.context.createBiquadFilter() : gain;
+    const filterNode = filter ? this.context.createBiquadFilter() : null;
     const endTime = time + duration;
 
     oscillator.type = type;
@@ -905,13 +927,13 @@ export class ProceduralMusicManager {
     gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, volume), time + Math.max(0.001, attack));
     gain.gain.setTargetAtTime(0.0001, Math.max(time + attack, endTime - release), release * 0.34);
 
-    if (filter) {
-      output.type = filter.type ?? "lowpass";
-      output.frequency.setValueAtTime(filter.frequency ?? 900, time);
-      output.frequency.exponentialRampToValueAtTime(Math.max(20, filter.endFrequency ?? filter.frequency ?? 900), endTime);
-      output.Q.value = filter.q ?? 1;
-      oscillator.connect(output);
-      output.connect(gain);
+    if (filter && filterNode) {
+      filterNode.type = (filter.type ?? "lowpass") as BiquadFilterType;
+      filterNode.frequency.setValueAtTime(filter.frequency ?? 900, time);
+      filterNode.frequency.exponentialRampToValueAtTime(Math.max(20, filter.endFrequency ?? filter.frequency ?? 900), endTime);
+      filterNode.Q.value = filter.q ?? 1;
+      oscillator.connect(filterNode);
+      filterNode.connect(gain);
     } else {
       oscillator.connect(gain);
     }
@@ -921,7 +943,7 @@ export class ProceduralMusicManager {
     oscillator.stop(endTime + release + 0.05);
   }
 
-  playNoiseLayer(time, duration, volume, frequency, bus, filterType = "bandpass", endFrequency = frequency) {
+  playNoiseLayer(time, duration, volume, frequency, bus, filterType: BiquadFilterType = "bandpass", endFrequency = frequency) {
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
     const filter = this.context.createBiquadFilter();
