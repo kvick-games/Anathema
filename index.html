@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Moon Grave: Battleship Roguelike</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <div class="top-row">
+        <div class="brand">
+          <span class="kicker">Moon Grave</span>
+          <strong>Deck 0: Impact Scar</strong>
+        </div>
+        <div class="meters">
+          <label><span>HP</span><meter id="hp" min="0" max="100" value="100"></meter></label>
+          <label><span>STA</span><meter id="stamina" min="0" max="100" value="100"></meter></label>
+          <label><span>SAN</span><meter id="sanity" min="0" max="100" value="82"></meter></label>
+          <label><span>GOON</span><meter id="goon" min="0" max="100" value="7"></meter></label>
+        </div>
+      </div>
+      <div class="stat-grid" id="stats"></div>
+      <div id="lock-status">LOCK: searching</div>
+      <div class="bottom-row">
+        <div id="weapon">Gunblade: folded</div>
+        <div id="message">Click to lock mouse. H opens the character menu. Movement follows the reference bindings.</div>
+      </div>
+    </div>
+    <aside id="codex" class="codex" hidden>
+      <div class="codex-panel">
+        <div class="codex-head">
+          <div>
+            <span class="kicker">Pilot Menu</span>
+            <h2>Character Sheet</h2>
+          </div>
+          <button id="close-codex" type="button">Close</button>
+        </div>
+        <div class="codex-columns">
+          <section>
+            <h3>Movement Controls</h3>
+            <div class="bind-list" id="movement-bindings"></div>
+          </section>
+          <section>
+            <h3>Combat Bindings</h3>
+            <div class="bind-list" id="combat-bindings"></div>
+          </section>
+          <section class="wide">
+            <h3>Core Stats</h3>
+            <div class="character-grid" id="character-stats"></div>
+          </section>
+          <section class="wide">
+            <h3>Equipped Items</h3>
+            <div class="equipment-grid" id="equipment-list"></div>
+          </section>
+          <section class="wide">
+            <h3>Active Buffs and Status</h3>
+            <div class="status-list" id="status-list"></div>
+          </section>
+          <section class="wide">
+            <h3>Stat Reference</h3>
+            <div class="stat-help" id="stat-help"></div>
+          </section>
+          <section class="wide">
+            <h3>Buffs, Upgrades, and Arsenal</h3>
+            <div id="upgrade-log" class="upgrade-log"></div>
+          </section>
+        </div>
+      </div>
+    </aside>
+    <div id="death" hidden>
+      <h1>You are archived in moon dust.</h1>
+      <p>Your clone wakes older, weaker, and meaner. Press R to crawl out again.</p>
+    </div>
+    <canvas id="game"></canvas>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.164.1/build/three.module.js"
+        }
+      }
+    </script>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
