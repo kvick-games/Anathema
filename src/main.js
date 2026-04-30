@@ -39,6 +39,9 @@ const hud = {
   upgradeLog: document.querySelector("#upgrade-log"),
   brand: document.querySelector(".brand strong"),
   lockStatus: document.querySelector("#lock-status"),
+  lockToggle: document.querySelector("#lock-toggle"),
+  debugCollisionToggle: document.querySelector("#debug-collision-toggle"),
+  combatHud: document.querySelector("#combat-hud"),
   enemyIndicators: document.querySelector("#enemy-indicators"),
 };
 
@@ -46,7 +49,7 @@ const keys = new Set();
 const pointer = { locked: false, yaw: 0, pitch: -0.18 };
 const input = { left: false, right: false };
 const tmp = new THREE.Vector3();
-const lock = { target: null, marker: null };
+const lock = { target: null, marker: null, enabled: true };
 const gltfLoader = new GLTFLoader();
 const enemyModelCache = new Map();
 
@@ -95,6 +98,10 @@ const materials = {
   hostileTracer: new THREE.MeshBasicMaterial({ color: 0xb45cff }),
   lock: new THREE.MeshBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0.82 }),
   laser: new THREE.MeshBasicMaterial({ color: 0xff304f }),
+  collisionBox: new THREE.MeshBasicMaterial({ color: 0xff4a4a, wireframe: true, transparent: true, opacity: 0.72, depthTest: false }),
+  collisionCircle: new THREE.MeshBasicMaterial({ color: 0xffd36a, wireframe: true, transparent: true, opacity: 0.82, depthTest: false }),
+  collisionPlayer: new THREE.MeshBasicMaterial({ color: 0x7bd4ff, wireframe: true, transparent: true, opacity: 0.9, depthTest: false }),
+  collisionEnemy: new THREE.MeshBasicMaterial({ color: 0xb45cff, wireframe: true, transparent: true, opacity: 0.78, depthTest: false }),
 };
 
 const player = {
@@ -140,6 +147,21 @@ const enemyTypes = {
   skitter: { label: "Skitter", hp: 18, speed: 5.2, damage: 6, range: 1.3, color: "cyan", attack: "melee", minion: true },
 };
 
+const enemyNameParts = {
+  prefixes: ["Ash", "Vile", "Grief", "Null", "Rust", "Pale", "Black", "Choir", "Gore", "Hollow", "Iron", "Moon"],
+  names: ["Azra", "Malvek", "Iosef", "Seren", "Vath", "Orison", "Khar", "Morrow", "Eidra", "Thorne", "Calix", "Nema"],
+  titles: {
+    zealot: ["the Penitent", "of the Last Bell", "the Shattered", "of Bone"],
+    seraphRifle: ["the Far Choir", "of the Sightline", "the Lancer", "of Glass"],
+    womb: ["the Gate-Mother", "of the Breach", "the Swollen", "of the Ninth Door"],
+    splitter: ["the Divided", "of the Split Halo", "the Twice-Born", "of Fractures"],
+    charger: ["the Crownbreaker", "of the Red Impact", "the Ram", "of Iron Teeth"],
+    laserSentry: ["the Watcher", "of the Burning Line", "the Fixed Eye", "of Judgment"],
+    auraSpire: ["the Cantor", "of the Green Hymn", "the Choir Nail", "of Rotten Grace"],
+    skitter: ["the Small", "of the Underdeck", "the Gnawing", "of Static"],
+  },
+};
+
 const enemies = [];
 const projectiles = [];
 const impacts = [];
@@ -147,10 +169,20 @@ const levelObjects = [];
 const colliders = [];
 const floorZones = [];
 const spawnPoints = [];
+const debugCollision = {
+  enabled: false,
+  dirty: true,
+  group: new THREE.Group(),
+  staticGroup: new THREE.Group(),
+  dynamicGroup: new THREE.Group(),
+};
 let wave = 1;
 let levelSeed = 1;
+let enemyNameSerial = 1;
 let portal = null;
 let portalActive = false;
+let audioContext = null;
+let audioUnlocked = false;
 
 const physics = {
   gravity: 34,
@@ -177,6 +209,7 @@ const combatBindings = [
   ["Left Shoulder Weapon", "Q"],
   ["Right Shoulder Weapon", "E"],
   ["Shift Control", "R"],
+  ["Toggle Lock-On", "T / HUD"],
   ["Auto Lock-On", "Automatic"],
 ];
 
@@ -188,6 +221,7 @@ const systemBindings = [
   ["Scan", "V"],
   ["Purge Weapon", "P"],
   ["Cycle Weapon", "Arrow Left / Arrow Right"],
+  ["Collision Debug View", "F3 / HUD"],
   ["Restart Run", "Backspace"],
   ["Mouse Lock", "Click Canvas"],
 ];
@@ -227,9 +261,183 @@ function rand(seed) {
   return x - Math.floor(x);
 }
 
+function pickEnemyNamePart(parts, seed) {
+  return parts[Math.floor(rand(seed) * parts.length) % parts.length];
+}
+
+function makeEnemyName(typeName, x, z, tier) {
+  const serial = enemyNameSerial;
+  enemyNameSerial += 1;
+  const prefix = pickEnemyNamePart(enemyNameParts.prefixes, levelSeed + x * 0.31 + serial);
+  const name = pickEnemyNamePart(enemyNameParts.names, levelSeed + z * 0.37 + serial * 2);
+  const titles = enemyNameParts.titles[typeName] ?? ["the Nameless"];
+  const title = pickEnemyNamePart(titles, levelSeed + tier * 3.1 + serial * 3);
+  return `${prefix} ${name} ${title}`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  })[char]);
+}
+
 function addLevelObject(object) {
   levelObjects.push(object);
   scene.add(object);
+}
+
+function markCollisionDebugDirty() {
+  debugCollision.dirty = true;
+}
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  const AudioCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtor) return;
+  audioContext ??= new AudioCtor();
+  if (audioContext.state === "suspended") audioContext.resume();
+  audioUnlocked = true;
+}
+
+function playTone({ frequency = 220, endFrequency = frequency, duration = 0.16, type = "sine", volume = 0.14, delay = 0, filter = null }) {
+  if (!audioUnlocked || !audioContext) return;
+  const now = audioContext.currentTime + delay;
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const destination = filter ? audioContext.createBiquadFilter() : gain;
+
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, now);
+  oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, endFrequency), now + duration);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(volume, now + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+  if (filter) {
+    filterNodeSetup(destination, filter, now, duration);
+    oscillator.connect(destination);
+    destination.connect(gain);
+  } else {
+    oscillator.connect(gain);
+  }
+
+  gain.connect(audioContext.destination);
+  oscillator.start(now);
+  oscillator.stop(now + duration + 0.03);
+}
+
+function filterNodeSetup(node, filter, now, duration) {
+  node.type = filter.type ?? "lowpass";
+  node.frequency.setValueAtTime(filter.frequency ?? 900, now);
+  node.frequency.exponentialRampToValueAtTime(Math.max(20, filter.endFrequency ?? filter.frequency ?? 900), now + duration);
+  node.Q.value = filter.q ?? 1;
+}
+
+function playNoise({ duration = 0.12, volume = 0.12, delay = 0, filter = 1400 } = {}) {
+  if (!audioUnlocked || !audioContext) return;
+  const now = audioContext.currentTime + delay;
+  const buffer = audioContext.createBuffer(1, Math.max(1, Math.floor(audioContext.sampleRate * duration)), audioContext.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+  const source = audioContext.createBufferSource();
+  const gain = audioContext.createGain();
+  const tone = audioContext.createBiquadFilter();
+  tone.type = "bandpass";
+  tone.frequency.value = filter;
+  tone.Q.value = 0.8;
+  gain.gain.setValueAtTime(volume, now);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  source.buffer = buffer;
+  source.connect(tone);
+  tone.connect(gain);
+  gain.connect(audioContext.destination);
+  source.start(now);
+}
+
+function playSfx(name, intensity = 1) {
+  const volume = THREE.MathUtils.clamp(intensity, 0.45, 1.8);
+  if (name === "slash") {
+    playTone({ frequency: 180, endFrequency: 760, duration: 0.11, type: "sawtooth", volume: 0.075 * volume, filter: { type: "bandpass", frequency: 520, endFrequency: 1600, q: 2.2 } });
+    playNoise({ duration: 0.09, volume: 0.045 * volume, filter: 2200 });
+  } else if (name === "shot") {
+    playTone({ frequency: 90, endFrequency: 42, duration: 0.12, type: "square", volume: 0.08 * volume, filter: { type: "lowpass", frequency: 900, endFrequency: 160, q: 0.8 } });
+    playNoise({ duration: 0.07, volume: 0.07 * volume, filter: 1800 });
+  } else if (name === "shoulder") {
+    playTone({ frequency: 120, endFrequency: 55, duration: 0.24, type: "sawtooth", volume: 0.11 * volume, filter: { type: "lowpass", frequency: 1200, endFrequency: 180, q: 1.1 } });
+    playNoise({ duration: 0.18, volume: 0.09 * volume, filter: 900 });
+  } else if (name === "enemy") {
+    playTone({ frequency: 300, endFrequency: 110, duration: 0.16, type: "triangle", volume: 0.055 * volume, filter: { type: "bandpass", frequency: 760, endFrequency: 240, q: 1.8 } });
+  } else if (name === "hit") {
+    playTone({ frequency: 72, endFrequency: 38, duration: 0.1, type: "square", volume: 0.05 * volume, filter: { type: "lowpass", frequency: 650, endFrequency: 130, q: 0.7 } });
+    playNoise({ duration: 0.08, volume: 0.055 * volume, filter: 1200 });
+  } else if (name === "complete") {
+    playTone({ frequency: 164, endFrequency: 246, duration: 0.32, type: "sine", volume: 0.09 * volume });
+    playTone({ frequency: 246, endFrequency: 370, duration: 0.34, type: "triangle", volume: 0.07 * volume, delay: 0.08 });
+    playTone({ frequency: 370, endFrequency: 554, duration: 0.42, type: "sine", volume: 0.075 * volume, delay: 0.18 });
+    playNoise({ duration: 0.45, volume: 0.035 * volume, delay: 0.05, filter: 2600 });
+  }
+}
+
+function particleMaterial(color, opacity = 0.95) {
+  return new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+}
+
+function addSpark(position, velocity, color, size, life) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(size, 6, 4), particleMaterial(color));
+  mesh.position.copy(position);
+  scene.add(mesh);
+  impacts.push({
+    mesh,
+    life,
+    maxLife: life,
+    velocity,
+    gravity: 7.5,
+    spin: new THREE.Vector3(Math.random() * 4, Math.random() * 4, Math.random() * 4),
+    disposeMaterial: true,
+    disposeGeometry: true,
+  });
+}
+
+function burstParticles(position, color, count = 12, power = 5, size = 0.055, yBias = 1.1) {
+  for (let i = 0; i < count; i += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = power * (0.45 + Math.random() * 0.9);
+    const velocity = new THREE.Vector3(
+      Math.cos(angle) * speed,
+      yBias + Math.random() * power * 0.55,
+      Math.sin(angle) * speed,
+    );
+    addSpark(position.clone().add(new THREE.Vector3(0, 0.8 + Math.random() * 0.5, 0)), velocity, color, size * (0.7 + Math.random() * 0.8), 0.35 + Math.random() * 0.28);
+  }
+}
+
+function muzzleBurst(position, direction, color = 0xffd36a) {
+  for (let i = 0; i < 8; i += 1) {
+    const side = new THREE.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 0.7, (Math.random() - 0.5) * 1.2);
+    const velocity = direction.clone().multiplyScalar(7 + Math.random() * 7).add(side);
+    addSpark(position.clone().add(direction.clone().multiplyScalar(0.7)), velocity, color, 0.045 + Math.random() * 0.035, 0.18 + Math.random() * 0.14);
+  }
+}
+
+function slashArc(position, direction) {
+  const origin = position.clone().add(new THREE.Vector3(0, 1.1, 0)).add(direction.clone().multiplyScalar(1.4));
+  const right = new THREE.Vector3(-direction.z, 0, direction.x);
+  for (let i = -5; i <= 5; i += 1) {
+    const t = i / 5;
+    const point = origin.clone().add(right.clone().multiplyScalar(t * 1.3)).add(new THREE.Vector3(0, 0.35 * (1 - Math.abs(t)), 0));
+    const velocity = direction.clone().multiplyScalar(2.5).add(right.clone().multiplyScalar(t * 4)).add(new THREE.Vector3(0, 1.2, 0));
+    addSpark(point, velocity, 0xffc87a, 0.05, 0.24 + Math.random() * 0.12);
+  }
+}
+
+function levelCompleteBurst(position) {
+  burstParticles(position, 0x7bd4ff, 34, 8.5, 0.075, 2.4);
+  burstParticles(position, 0xb45cff, 24, 6.8, 0.065, 2.1);
+  burstParticles(position, 0xffd36a, 18, 5.4, 0.055, 2.0);
 }
 
 function addBoxAsset(x, z, width, depth, height, material, blocks = true, y = height / 2) {
@@ -238,7 +446,10 @@ function addBoxAsset(x, z, width, depth, height, material, blocks = true, y = he
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   addLevelObject(mesh);
-  if (blocks) colliders.push({ type: "box", x, z, w: width, d: depth });
+  if (blocks) {
+    colliders.push({ type: "box", x, z, w: width, d: depth });
+    markCollisionDebugDirty();
+  }
   return mesh;
 }
 
@@ -250,8 +461,77 @@ function addCircleAsset(x, z, radius, height, material, blocks = true) {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   addLevelObject(mesh);
-  if (blocks) colliders.push({ type: "circle", x, z, r: radius });
+  if (blocks) {
+    colliders.push({ type: "circle", x, z, r: radius });
+    markCollisionDebugDirty();
+  }
   return mesh;
+}
+
+function clearGroup(group) {
+  while (group.children.length) {
+    const child = group.children[0];
+    group.remove(child);
+    if (child.geometry) child.geometry.dispose();
+  }
+}
+
+function makeCollisionBox(collider, material, height = 1.5) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(collider.w, height, collider.d), material);
+  mesh.position.set(collider.x, height / 2 + 0.05, collider.z);
+  mesh.renderOrder = 1000;
+  return mesh;
+}
+
+function makeCollisionCircle(x, z, radius, material, height = 0.18) {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 48, 1, true), material);
+  mesh.position.set(x, height / 2 + 0.08, z);
+  mesh.renderOrder = 1000;
+  return mesh;
+}
+
+function rebuildStaticCollisionDebug() {
+  clearGroup(debugCollision.staticGroup);
+  for (const collider of colliders) {
+    const mesh = collider.type === "circle"
+      ? makeCollisionCircle(collider.x, collider.z, collider.r, materials.collisionCircle)
+      : makeCollisionBox(collider, materials.collisionBox);
+    debugCollision.staticGroup.add(mesh);
+  }
+  debugCollision.dirty = false;
+}
+
+function updateDynamicCollisionDebug() {
+  clearGroup(debugCollision.dynamicGroup);
+  debugCollision.dynamicGroup.add(makeCollisionCircle(player.group.position.x, player.group.position.z, physics.playerRadius, materials.collisionPlayer, 0.24));
+  for (const enemy of enemies) {
+    const radius = enemy.radius ?? physics.enemyRadius;
+    debugCollision.dynamicGroup.add(makeCollisionCircle(enemy.group.position.x, enemy.group.position.z, radius, materials.collisionEnemy, 0.2));
+  }
+}
+
+function updateCollisionDebug() {
+  if (!debugCollision.enabled) return;
+  if (debugCollision.dirty) rebuildStaticCollisionDebug();
+  updateDynamicCollisionDebug();
+}
+
+function setCollisionDebug(enabled) {
+  debugCollision.enabled = enabled;
+  debugCollision.group.visible = enabled;
+  hud.debugCollisionToggle.classList.toggle("off", !enabled);
+  hud.debugCollisionToggle.textContent = enabled ? "COLLISION VIEW ON" : "COLLISION VIEW";
+  if (enabled) {
+    markCollisionDebugDirty();
+    updateCollisionDebug();
+  } else {
+    clearGroup(debugCollision.dynamicGroup);
+  }
+  hud.message.textContent = enabled ? "Collision debug view enabled." : "Collision debug view disabled.";
+}
+
+function toggleCollisionDebug() {
+  setCollisionDebug(!debugCollision.enabled);
 }
 
 function addFloorZone(zone) {
@@ -272,6 +552,167 @@ function terrainHeight(x, z) {
   const route = isOnRoute(x, z, 3);
   if (route) return 0;
   return Math.sin(x * 0.035 + levelSeed) * Math.cos(z * 0.041 - levelSeed) * 0.8 - 0.45;
+}
+
+function overlapsCollider(x, z, radius) {
+  for (const collider of colliders) {
+    if (collider.type === "circle") {
+      if (Math.hypot(x - collider.x, z - collider.z) < radius + collider.r) return true;
+    } else {
+      const closestX = THREE.MathUtils.clamp(x, collider.x - collider.w / 2, collider.x + collider.w / 2);
+      const closestZ = THREE.MathUtils.clamp(z, collider.z - collider.d / 2, collider.z + collider.d / 2);
+      if ((x - closestX) ** 2 + (z - closestZ) ** 2 < radius * radius) return true;
+    }
+  }
+  return false;
+}
+
+function isSafeSpawnPoint(x, z, radius) {
+  return isOnRoute(x, z, -radius) && !overlapsCollider(x, z, radius + 0.45);
+}
+
+function zoneWidth(zone) {
+  return zone.w ?? (zone.r ? zone.r * 2 : 18);
+}
+
+function zoneDepth(zone) {
+  return zone.d ?? (zone.r ? zone.r * 2 : 18);
+}
+
+function findSafePoint(zone, radius = physics.enemyRadius, preferred = null) {
+  const source = preferred ?? zone;
+  const candidates = [
+    { x: source.x, z: source.z },
+    { x: zone.x, z: zone.z },
+  ];
+
+  for (let i = 0; i < 36; i += 1) {
+    const spreadX = Math.max(2, zoneWidth(zone) / 2 - radius - 2);
+    const spreadZ = Math.max(2, zoneDepth(zone) / 2 - radius - 2);
+    const x = source.x + (rand(levelSeed + i * 13 + source.x) - 0.5) * spreadX * 2;
+    const z = source.z + (rand(levelSeed + i * 17 + source.z) - 0.5) * spreadZ * 2;
+    candidates.push({ x, z });
+  }
+
+  for (let ring = 1; ring <= 10; ring += 1) {
+    const distance = radius + ring * 1.7;
+    const steps = 8 + ring * 2;
+    for (let step = 0; step < steps; step += 1) {
+      const angle = (step / steps) * Math.PI * 2 + ring * 0.37;
+      candidates.push({
+        x: source.x + Math.cos(angle) * distance,
+        z: source.z + Math.sin(angle) * distance,
+      });
+    }
+  }
+
+  const gridStep = Math.max(radius * 2.2, 2.4);
+  const halfW = Math.max(0, zoneWidth(zone) / 2 - radius - 1);
+  const halfD = Math.max(0, zoneDepth(zone) / 2 - radius - 1);
+  for (let x = zone.x - halfW; x <= zone.x + halfW; x += gridStep) {
+    for (let z = zone.z - halfD; z <= zone.z + halfD; z += gridStep) {
+      candidates.push({ x, z });
+    }
+  }
+
+  let best = null;
+  let bestDistance = Infinity;
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.z)) continue;
+    if (!isSafeSpawnPoint(candidate.x, candidate.z, radius)) continue;
+    const dx = candidate.x - source.x;
+    const dz = candidate.z - source.z;
+    const distance = dx * dx + dz * dz;
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+
+  return best ?? { x: zone.x, z: zone.z };
+}
+
+function nearestFloorZone(x, z) {
+  let best = floorZones[0] ?? { x: 0, z: 0, w: 80, d: 80 };
+  let bestDistance = Infinity;
+  for (const zone of floorZones) {
+    const dx = x - zone.x;
+    const dz = z - zone.z;
+    const distance = dx * dx + dz * dz;
+    if (distance < bestDistance) {
+      best = zone;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function clearCollisionNear(x, z, radius) {
+  let changed = false;
+  for (let i = colliders.length - 1; i >= 0; i -= 1) {
+    const collider = colliders[i];
+    const distance = collider.type === "circle"
+      ? Math.hypot(x - collider.x, z - collider.z) - collider.r
+      : Math.hypot(x - THREE.MathUtils.clamp(x, collider.x - collider.w / 2, collider.x + collider.w / 2), z - THREE.MathUtils.clamp(z, collider.z - collider.d / 2, collider.z + collider.d / 2));
+    if (distance < radius) {
+      colliders.splice(i, 1);
+      changed = true;
+    }
+  }
+  if (changed) markCollisionDebugDirty();
+}
+
+function distanceSqToSegment(x, z, start, end) {
+  const vx = end.x - start.x;
+  const vz = end.z - start.z;
+  const lengthSq = vx * vx + vz * vz;
+  if (lengthSq < 0.0001) return (x - start.x) ** 2 + (z - start.z) ** 2;
+  const t = THREE.MathUtils.clamp(((x - start.x) * vx + (z - start.z) * vz) / lengthSq, 0, 1);
+  const closestX = start.x + vx * t;
+  const closestZ = start.z + vz * t;
+  return (x - closestX) ** 2 + (z - closestZ) ** 2;
+}
+
+function segmentIntersectsBox(start, end, minX, maxX, minZ, maxZ) {
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  let tMin = 0;
+  let tMax = 1;
+  for (const [origin, direction, min, max] of [[start.x, dx, minX, maxX], [start.z, dz, minZ, maxZ]]) {
+    if (Math.abs(direction) < 0.0001) {
+      if (origin < min || origin > max) return false;
+    } else {
+      const inv = 1 / direction;
+      const t1 = (min - origin) * inv;
+      const t2 = (max - origin) * inv;
+      tMin = Math.max(tMin, Math.min(t1, t2));
+      tMax = Math.min(tMax, Math.max(t1, t2));
+      if (tMin > tMax) return false;
+    }
+  }
+  return true;
+}
+
+function clearCollisionAlongSegment(start, end, radius) {
+  let changed = false;
+  for (let i = colliders.length - 1; i >= 0; i -= 1) {
+    const collider = colliders[i];
+    const intersectsAccessLane = collider.type === "circle"
+      ? distanceSqToSegment(collider.x, collider.z, start, end) < (radius + collider.r) ** 2
+      : segmentIntersectsBox(
+        start,
+        end,
+        collider.x - collider.w / 2 - radius,
+        collider.x + collider.w / 2 + radius,
+        collider.z - collider.d / 2 - radius,
+        collider.z + collider.d / 2 + radius,
+      );
+    if (intersectsAccessLane) {
+      colliders.splice(i, 1);
+      changed = true;
+    }
+  }
+  if (changed) markCollisionDebugDirty();
 }
 
 function resolveCircleCollision(position, radius) {
@@ -308,29 +749,6 @@ function resolveCircleCollision(position, radius) {
       }
     }
   }
-
-  if (!isOnRoute(position.x, position.z, radius * 0.4)) {
-    let nearest = null;
-    let nearestDistance = Infinity;
-    for (const zone of floorZones) {
-      const clampX = zone.type === "circle" ? zone.x : THREE.MathUtils.clamp(position.x, zone.x - zone.w / 2, zone.x + zone.w / 2);
-      const clampZ = zone.type === "circle" ? zone.z : THREE.MathUtils.clamp(position.z, zone.z - zone.d / 2, zone.z + zone.d / 2);
-      const dx = position.x - clampX;
-      const dz = position.z - clampZ;
-      const distance = dx * dx + dz * dz;
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearest = { x: clampX, z: clampZ };
-      }
-    }
-    if (nearest) {
-      position.x = THREE.MathUtils.lerp(position.x, nearest.x, 0.28);
-      position.z = THREE.MathUtils.lerp(position.z, nearest.z, 0.28);
-    }
-  }
-
-  position.x = THREE.MathUtils.clamp(position.x, -132, 132);
-  position.z = THREE.MathUtils.clamp(position.z, -132, 132);
 }
 
 function applyGravity(entity, dt, height) {
@@ -395,6 +813,7 @@ function addRoomWalls(zone, wallHeight, material) {
 function generateLevel() {
   for (const object of levelObjects.splice(0)) scene.remove(object);
   colliders.length = 0;
+  markCollisionDebugDirty();
   floorZones.length = 0;
   spawnPoints.length = 0;
   portal = null;
@@ -449,6 +868,7 @@ function generateLevel() {
   player.group.position.set(start.x, physics.playerHeight, start.z);
   player.yVelocity = 0;
   player.grounded = true;
+  markCollisionDebugDirty();
 }
 
 function makeStars() {
@@ -582,9 +1002,14 @@ function makeProceduralEnemyVisual(typeName, type, tier) {
 
 function makeEnemy(x, z, typeName = "zealot", tier = wave) {
   const type = enemyTypes[typeName];
+  const spawnZone = nearestFloorZone(x, z);
+  const spawn = isSafeSpawnPoint(x, z, physics.enemyRadius)
+    ? { x, z }
+    : findSafePoint(spawnZone, physics.enemyRadius, { x, z });
+  const name = makeEnemyName(typeName, spawn.x, spawn.z, tier);
   const variance = 0.84 + Math.random() * 0.42;
   const group = new THREE.Group();
-  group.position.set(x, terrainHeight(x, z) + physics.enemyHeight, z);
+  group.position.set(spawn.x, terrainHeight(spawn.x, spawn.z) + physics.enemyHeight, spawn.z);
   scene.add(group);
 
   const visual = new THREE.Group();
@@ -600,6 +1025,8 @@ function makeEnemy(x, z, typeName = "zealot", tier = wave) {
     typeName,
     tier,
     label: type.label,
+    name,
+    displayName: `${name}, ${type.label}`,
     hp: (type.hp + tier * 7) * variance,
     maxHp: (type.hp + tier * 7) * variance,
     speed: (type.speed + tier * 0.08) * (0.86 + Math.random() * 0.28),
@@ -641,11 +1068,10 @@ function spawnWave() {
   for (let i = 0; i < count; i += 1) {
     const spawn = spawnPoints[1 + (i % Math.max(1, spawnPoints.length - 1))] ?? spawnPoints[0] ?? { x: 0, z: 0, room: { w: 70, d: 70 } };
     const room = spawn.room ?? { w: 70, d: 70 };
-    const x = spawn.x + (Math.random() - 0.5) * Math.max(8, room.w - 10);
-    const z = spawn.z + (Math.random() - 0.5) * Math.max(8, room.d - 10);
+    const safe = findSafePoint(room, physics.enemyRadius, spawn);
     const unlocked = ["zealot", "splitter", "charger", "seraphRifle", "womb", "laserSentry", "auraSpire"].slice(0, Math.min(7, 2 + Math.floor(wave / 2)));
     const type = i === 0 && wave >= 2 ? "laserSentry" : i === 1 && wave >= 3 ? "auraSpire" : unlocked[Math.floor(Math.random() * unlocked.length)];
-    makeEnemy(x, z, type, wave);
+    makeEnemy(safe.x, safe.z, type, wave);
   }
   hud.message.textContent = `Deck ${wave}: follow the route through ${spawnPoints.length} rooms and exterior breaches.`;
 }
@@ -693,6 +1119,14 @@ function findLockTarget(range) {
 }
 
 function updateLockOn(dt) {
+  hud.lockToggle.textContent = lock.enabled ? "LOCK ON" : "LOCK OFF";
+  hud.lockToggle.classList.toggle("off", !lock.enabled);
+  if (!lock.enabled) {
+    clearLock();
+    hud.lockStatus.textContent = "LOCK: manual";
+    hud.lockStatus.classList.remove("locked");
+    return;
+  }
   if (player.dead || !hud.codex.hidden || !hud.controls.hidden) {
     clearLock();
     hud.lockStatus.textContent = player.dead ? "LOCK: offline" : "LOCK: paused";
@@ -721,13 +1155,19 @@ function updateLockOn(dt) {
   lock.marker.position.copy(lock.target.group.position).add(new THREE.Vector3(0, 0.18, 0));
   lock.marker.scale.setScalar(1 + Math.sin(performance.now() * 0.009) * 0.08);
   pointer.yaw = turnToward(pointer.yaw, targetYaw(lock.target.group.position), Math.min(1, dt * 9));
-  hud.lockStatus.textContent = `LOCK: ${lock.target.label} | ${currentDistance.toFixed(0)}m`;
+  hud.lockStatus.textContent = `LOCK: ${lock.target.displayName} | ${currentDistance.toFixed(0)}m`;
   hud.lockStatus.classList.add("locked");
 }
 
 function lockedDirection() {
   if (!lock.target) return playerForward();
   return lock.target.group.position.clone().add(new THREE.Vector3(0, 0.45, 0)).sub(player.group.position.clone().add(new THREE.Vector3(0, 1.05, 0))).normalize();
+}
+
+function toggleLockOn() {
+  lock.enabled = !lock.enabled;
+  if (!lock.enabled) clearLock();
+  hud.message.textContent = lock.enabled ? "Lock-on enabled." : "Lock-on disabled.";
 }
 
 function resize() {
@@ -816,11 +1256,15 @@ function leftHand() {
   player.stamina -= 8;
   const reach = weapon.reach + player.str * 0.04;
   const forward = playerForward();
+  playSfx("slash", weapon.mode === "assault" ? 1.15 : 1);
+  slashArc(player.group.position, forward);
   for (const enemy of enemies) {
     tmp.copy(enemy.group.position).sub(player.group.position);
     if (tmp.length() < reach && tmp.normalize().dot(forward) > 0.25) {
       enemy.hp -= weapon.damage + player.str * 1.7 + player.goon * 0.08;
       if (weapon.chain > 0) chainDamage(enemy, weapon.chain);
+      playSfx("hit", 0.9);
+      burstParticles(enemy.group.position, 0xffc87a, 13, 5.5, 0.06);
       pulse(enemy.group.position, 0xffc87a);
     }
   }
@@ -834,6 +1278,8 @@ function rightHand() {
   const origin = player.group.position.clone().add(new THREE.Vector3(0, 1.05, 0));
   const base = lock.target ? lock.target.group.position.clone().add(new THREE.Vector3(0, 0.45, 0)).sub(origin).normalize() : playerForward();
   const shots = weapon.multishot;
+  playSfx("shot", Math.min(1.65, 0.8 + shots * 0.16));
+  muzzleBurst(origin, base, weapon.mode === "assault" ? 0xffc87a : 0xffd36a);
   for (let i = 0; i < shots; i += 1) {
     const spread = (i - (shots - 1) / 2) * 0.08;
     const dir = base.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), spread).normalize();
@@ -846,8 +1292,11 @@ function shoulder(side) {
   player.shoulderCd = 1.1;
   player.stamina -= 18;
   const count = side === "left" ? 7 : 3 + Math.floor(player.int / 8);
+  playSfx("shoulder", side === "left" ? 1.15 : 1.35);
+  burstParticles(player.group.position, side === "left" ? 0xffd36a : 0x7bd4ff, side === "left" ? 16 : 11, 4.8, 0.05, 1.6);
   for (let i = 0; i < count; i += 1) {
     const dir = playerForward().applyAxisAngle(new THREE.Vector3(0, 1, 0), (i - count / 2) * 0.13);
+    if (i < 5) muzzleBurst(player.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), dir, side === "left" ? 0xffd36a : 0x7bd4ff);
     projectiles.push({ owner: "player", pos: player.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), dir, life: 1.0, damage: 14 + player.int, speed: side === "left" ? 72 : 120, pierce: 0, radius: 1.15 });
   }
   hud.message.textContent = side === "left" ? "Left shoulder: flechette psalm." : "Right shoulder: rail hymn.";
@@ -887,6 +1336,8 @@ function updateProjectiles(dt) {
         if (enemy.group.position.distanceTo(p.pos) < p.radius) {
           enemy.hp -= p.damage;
           p.pierce -= 1;
+          playSfx("hit", 0.65);
+          burstParticles(enemy.group.position, 0xffd36a, 9, 4.7, 0.052);
           pulse(enemy.group.position, 0xffd36a);
           if (p.pierce < 0) p.life = 0;
         }
@@ -895,6 +1346,8 @@ function updateProjectiles(dt) {
       player.hp -= Math.max(3, p.damage - player.grit * 0.32);
       player.sanity -= p.sanity ?? 3;
       p.life = 0;
+      playSfx("hit", 0.75);
+      burstParticles(player.group.position, 0xb45cff, 10, 4.2, 0.055);
       pulse(player.group.position, 0xa23cff);
     }
 
@@ -902,9 +1355,26 @@ function updateProjectiles(dt) {
   }
 
   for (let i = impacts.length - 1; i >= 0; i -= 1) {
-    impacts[i].life -= dt;
-    if (impacts[i].life <= 0) {
-      scene.remove(impacts[i].mesh);
+    const impact = impacts[i];
+    impact.life -= dt;
+    if (impact.velocity) {
+      impact.velocity.y -= (impact.gravity ?? 0) * dt;
+      impact.mesh.position.addScaledVector(impact.velocity, dt);
+    }
+    if (impact.spin) {
+      impact.mesh.rotation.x += impact.spin.x * dt;
+      impact.mesh.rotation.y += impact.spin.y * dt;
+      impact.mesh.rotation.z += impact.spin.z * dt;
+    }
+    if (impact.maxLife && impact.mesh.scale) {
+      const fade = THREE.MathUtils.clamp(impact.life / impact.maxLife, 0, 1);
+      impact.mesh.scale.setScalar(Math.max(0.01, fade));
+      if (impact.mesh.material?.opacity !== undefined) impact.mesh.material.opacity = fade * 0.95;
+    }
+    if (impact.life <= 0) {
+      scene.remove(impact.mesh);
+      if (impact.disposeGeometry && impact.mesh.geometry) impact.mesh.geometry.dispose();
+      if (impact.disposeMaterial && impact.mesh.material) impact.mesh.material.dispose();
       impacts.splice(i, 1);
     }
   }
@@ -920,8 +1390,10 @@ function updateEnemyIndicators() {
     const distance = enemy.group.position.distanceTo(player.group.position);
     const locked = enemy === lock.target ? " locked" : "";
     const elite = enemy.stationary || enemy.buffed > 0 ? " elite" : "";
-    const label = enemy.typeName === "laserSentry" ? "LAS" : enemy.typeName === "auraSpire" ? "AUR" : enemy.minion ? "MIN" : Math.ceil(distance);
-    return `<div class="enemy-marker${locked}${elite}" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px">${label}</div>`;
+    const shortCode = enemy.typeName === "laserSentry" ? "LAS" : enemy.typeName === "auraSpire" ? "AUR" : enemy.minion ? "MIN" : Math.ceil(distance);
+    const label = locked || elite ? enemy.name.split(" ")[1] : shortCode;
+    const hp = THREE.MathUtils.clamp((enemy.hp / enemy.maxHp) * 100, 0, 100);
+    return `<div class="enemy-marker${locked}${elite}" title="${escapeHtml(enemy.displayName)}" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px"><span>${escapeHtml(label)}</span><i><b style="width:${hp.toFixed(1)}%"></b></i></div>`;
   }).join("");
 }
 
@@ -1003,6 +1475,7 @@ function updateEnemies(dt) {
       enemy.group.position.z += pz * push * 0.6;
       player.group.position.x -= px * push * 0.2;
       player.group.position.z -= pz * push * 0.2;
+      resolveCircleCollision(enemy.group.position, physics.enemyRadius);
       resolveCircleCollision(player.group.position, physics.playerRadius);
     }
     enemy.group.position.y = terrainHeight(enemy.group.position.x, enemy.group.position.z) + physics.enemyHeight;
@@ -1016,6 +1489,8 @@ function updateEnemies(dt) {
 function enemyShoot(enemy, dir) {
   enemy.cooldown = 1.0 + Math.random() * 0.8;
   const count = enemy.mutations.includes("frantic") ? 3 : 1;
+  playSfx("enemy", enemy.mutations.includes("frantic") ? 1.1 : 0.85);
+  muzzleBurst(enemy.group.position.clone().add(new THREE.Vector3(0, 0.8, 0)), dir, 0xb45cff);
   for (let i = 0; i < count; i += 1) {
     projectiles.push({
       owner: "enemy",
@@ -1044,6 +1519,8 @@ function enemyLaser(enemy, dt) {
     enemy.laserTick = 0.32;
     player.hp -= Math.max(2, enemy.damage * 0.22 - player.grit * 0.08);
     player.sanity -= 0.6;
+    playSfx("enemy", 0.55);
+    burstParticles(player.group.position, 0xff304f, 7, 3.6, 0.045);
     pulse(player.group.position, 0xff304f);
   }
 }
@@ -1051,9 +1528,10 @@ function enemyLaser(enemy, dt) {
 function enemySpawn(enemy, forcedType = null, amount = 2) {
   enemy.spawnCd = enemy.attack === "aura" ? 4.2 : 5.5;
   const spawnType = forcedType ?? (Math.random() > 0.5 ? "zealot" : "splitter");
+  const zone = nearestFloorZone(enemy.group.position.x, enemy.group.position.z);
   for (let i = 0; i < amount; i += 1) {
-    const a = Math.random() * Math.PI * 2;
-    makeEnemy(enemy.group.position.x + Math.cos(a) * 4, enemy.group.position.z + Math.sin(a) * 4, spawnType, Math.max(1, wave - 1));
+    const safe = findSafePoint(zone, physics.enemyRadius, { x: enemy.group.position.x, z: enemy.group.position.z });
+    makeEnemy(safe.x, safe.z, spawnType, Math.max(1, wave - 1));
   }
   pulse(enemy.group.position, 0x8bff79);
 }
@@ -1064,6 +1542,8 @@ function enemyMelee(enemy) {
   player.hp -= Math.max(4, enemy.damage * (enemy.buffed ? 1.25 : 1) - player.grit * 0.35);
   player.sanity -= enemy.mutations.includes("sanity-leech") ? 8 : 4;
   if (enemy.mutations.includes("barbed")) player.decay += 0.08;
+  playSfx("enemy", enemy.attack === "charge" ? 1.15 : 0.8);
+  burstParticles(player.group.position, enemy.attack === "charge" ? 0xff6f31 : 0xb45cff, enemy.attack === "charge" ? 15 : 9, enemy.attack === "charge" ? 5.8 : 4.2, 0.055);
   pulse(player.group.position, 0xa23cff);
 }
 
@@ -1076,8 +1556,10 @@ function killEnemy(index, enemy) {
   grantUpgrade(enemy);
 
   if (enemy.attack === "split" && enemy.maxHp > 28) {
+    const zone = nearestFloorZone(enemy.group.position.x, enemy.group.position.z);
     for (let j = 0; j < 2; j += 1) {
-      makeEnemy(enemy.group.position.x + (Math.random() - 0.5) * 5, enemy.group.position.z + (Math.random() - 0.5) * 5, "zealot", Math.max(1, wave - 1));
+      const safe = findSafePoint(zone, physics.enemyRadius, { x: enemy.group.position.x, z: enemy.group.position.z });
+      makeEnemy(safe.x, safe.z, "zealot", Math.max(1, wave - 1));
     }
   }
 }
@@ -1099,11 +1581,12 @@ function grantUpgrade(enemy) {
   const text = pool[Math.floor(Math.random() * pool.length)]();
   weapon.upgrades.unshift(text);
   weapon.upgrades = weapon.upgrades.slice(0, 7);
-  hud.message.textContent = `Kill ${player.kills}: ${text}. ${enemy.label} stats harvested.`;
+  hud.message.textContent = `Kill ${player.kills}: ${text}. ${enemy.displayName} stats harvested.`;
 }
 
 function nextLevel() {
   clearLock();
+  playSfx("complete", 0.8);
   portalActive = false;
   portal = null;
   wave += 1;
@@ -1132,7 +1615,9 @@ function scan() {
     return acc;
   }, {});
   const summary = Object.entries(counts).map(([name, count]) => `${count} ${name}`).join(", ") || "no hostiles";
-  hud.message.textContent = `Scan: ${summary}. Enemy stats are procedural every spawn.`;
+  const named = enemies.slice(0, 4).map((enemy) => enemy.name).join(", ");
+  const roster = enemies.length > 4 ? `${named}, +${enemies.length - 4} more` : named;
+  hud.message.textContent = `Scan: ${summary}. ${roster ? `Named: ${roster}. ` : ""}Enemy stats are procedural every spawn.`;
 }
 
 function purgeWeapon() {
@@ -1153,8 +1638,11 @@ function openPortal() {
   if (portalActive) return;
   portalActive = true;
   const end = spawnPoints[spawnPoints.length - 1] ?? { x: 0, z: -60 };
+  const approach = spawnPoints[spawnPoints.length - 2] ?? end;
   const group = new THREE.Group();
   group.position.set(end.x, terrainHeight(end.x, end.z) + 0.15, end.z);
+  clearCollisionAlongSegment(approach, end, 5.8);
+  clearCollisionNear(end.x, end.z, 9.5);
   const ring = new THREE.Mesh(new THREE.TorusGeometry(3.2, 0.18, 12, 64), materials.cyan);
   ring.rotation.x = Math.PI / 2;
   const core = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 0.12, 32), materials.violet);
@@ -1164,6 +1652,9 @@ function openPortal() {
   group.add(ring, core, light);
   portal = group;
   addLevelObject(group);
+  playSfx("complete", 1.15);
+  levelCompleteBurst(group.position);
+  pulse(group.position, 0x7bd4ff);
   hud.message.textContent = "Deck cleared. The breach portal is open at the far end of the route.";
 }
 
@@ -1171,7 +1662,7 @@ function updatePortal(dt) {
   if (!portalActive || !portal) return;
   portal.rotation.y += dt * 1.8;
   portal.children[0].scale.setScalar(1 + Math.sin(performance.now() * 0.006) * 0.08);
-  if (player.group.position.distanceTo(portal.position) < 4.3) nextLevel();
+  if (Math.hypot(player.group.position.x - portal.position.x, player.group.position.z - portal.position.z) < 4.3) nextLevel();
 }
 
 function toggleCodex(show = hud.codex.hidden) {
@@ -1248,6 +1739,20 @@ function updateHud() {
   hud.sanity.value = Math.max(0, player.sanity);
   hud.goon.value = player.goon;
   hud.weapon.textContent = `${weapon.name} | ${weapon.mode} | Deck ${wave} | Hostiles ${enemies.length} | ${portalActive ? "Portal open" : "Portal sealed"} | Kits ${player.repairKits}`;
+  const combatRows = [
+    ["LMB", weapon.mode === "rifle" ? "Bayonet" : "Left Weapon", player.attackCd],
+    ["RMB", weapon.mode === "folded" ? "Gunblade Fire" : weapon.name, player.shotCd],
+    ["Q", "Left Shoulder", player.shoulderCd],
+    ["E", "Right Shoulder", player.shoulderCd],
+    ["Shift", "Quick Boost", player.invuln],
+    ["Space", player.grounded ? "Jump Ready" : "Airborne", player.grounded ? 0 : 1],
+    ["T", lock.enabled ? "Lock-On On" : "Lock-On Off", 0],
+  ];
+  hud.combatHud.innerHTML = combatRows.map(([inputName, label, cd]) => {
+    const ready = cd <= 0;
+    const value = ready ? "READY" : `${cd.toFixed(1)}s`;
+    return `<div class="combat-slot ${ready ? "ready" : "cooling"}"><span class="keycap">${inputName}</span><b>${label}</b><em>${value}</em></div>`;
+  }).join("");
   const statPairs = [
     ["Age", Math.floor(player.age)],
     ["Decay", player.decay.toFixed(1)],
@@ -1314,13 +1819,23 @@ function tick() {
   updateCamera();
   updateEnemyIndicators();
   updateHud();
+  updateCollisionDebug();
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
 
+debugCollision.group.add(debugCollision.staticGroup, debugCollision.dynamicGroup);
+debugCollision.group.visible = false;
+scene.add(debugCollision.group);
+
 window.addEventListener("resize", resize);
 window.addEventListener("keydown", (event) => {
-  if (["Tab", "Space", "ArrowLeft", "ArrowRight", "Escape"].includes(event.code)) event.preventDefault();
+  unlockAudio();
+  if (["Tab", "Space", "ArrowLeft", "ArrowRight", "Escape", "F3"].includes(event.code)) event.preventDefault();
+  if (event.code === "F3") {
+    toggleCollisionDebug();
+    return;
+  }
   if (event.code === "Escape") {
     toggleCodex(false);
     toggleControls(false);
@@ -1344,6 +1859,7 @@ window.addEventListener("keydown", (event) => {
   if (event.code === "KeyC") repair();
   if (event.code === "KeyH" || event.code === "KeyF") toggleCodex();
   if (event.code === "KeyM") toggleControls();
+  if (event.code === "KeyT") toggleLockOn();
   if (event.code === "KeyV") scan();
   if (event.code === "KeyP") purgeWeapon();
   if (event.code === "ArrowLeft") cycleWeapon(-1);
@@ -1353,10 +1869,19 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => keys.delete(event.code));
 
 canvas.addEventListener("click", () => {
+  unlockAudio();
   if (hud.codex.hidden && hud.controls.hidden) canvas.requestPointerLock();
 });
 hud.closeCodex.addEventListener("click", () => toggleCodex(false));
 hud.closeControls.addEventListener("click", () => toggleControls(false));
+hud.lockToggle.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleLockOn();
+});
+hud.debugCollisionToggle.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleCollisionDebug();
+});
 document.addEventListener("pointerlockchange", () => {
   pointer.locked = document.pointerLockElement === canvas;
 });
@@ -1366,6 +1891,7 @@ document.addEventListener("mousemove", (event) => {
   pointer.pitch += event.movementY * 0.0017;
 });
 window.addEventListener("mousedown", (event) => {
+  unlockAudio();
   if (event.button === 0) input.left = true;
   if (event.button === 2) input.right = true;
 });

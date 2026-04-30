@@ -21,7 +21,12 @@
         </div>
       </div>
       <div class="stat-grid" id="stats"></div>
-      <div id="lock-status">LOCK: searching</div>
+      <div class="hud-stack">
+        <button id="lock-toggle" class="hud-button" type="button">LOCK ON</button>
+        <button id="debug-collision-toggle" class="hud-button off" type="button">COLLISION VIEW</button>
+        <div id="lock-status">LOCK: searching</div>
+        <div id="combat-hud"></div>
+      </div>
       <div class="bottom-row">
         <div id="weapon">Gunblade: folded</div>
         <div id="message">Click to lock mouse. H opens character. M opens controls.</div>

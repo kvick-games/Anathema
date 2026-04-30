@@ -110,6 +110,7 @@ meter::-webkit-meter-optimum-value {
 .stat-grid div,
 #weapon,
 #lock-status,
+#combat-hud,
 #message {
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(8, 10, 11, 0.58);
@@ -140,6 +141,67 @@ meter::-webkit-meter-optimum-value {
   color: #ffd36a;
 }
 
+.hud-stack {
+  align-self: flex-start;
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  width: min(360px, 46vw);
+}
+
+.hud-button {
+  pointer-events: auto;
+  justify-self: start;
+  border: 1px solid rgba(255, 211, 106, 0.65);
+  background: rgba(70, 48, 18, 0.88);
+  color: #ffd36a;
+  min-height: 30px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.hud-button.off {
+  border-color: rgba(160, 170, 176, 0.5);
+  background: rgba(21, 26, 30, 0.88);
+  color: #a8b1b6;
+}
+
+#combat-hud {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(145px, 1fr));
+  gap: 4px;
+  padding: 6px;
+}
+
+.combat-slot {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  color: #dfe9f0;
+  font-size: 11px;
+}
+
+.combat-slot b,
+.combat-slot em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combat-slot em {
+  color: #9ea8af;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.combat-slot.ready em {
+  color: #8bff79;
+}
+
 #enemy-indicators {
   position: fixed;
   inset: 0;
@@ -148,8 +210,9 @@ meter::-webkit-meter-optimum-value {
 
 .enemy-marker {
   position: absolute;
-  min-width: 28px;
-  height: 20px;
+  min-width: 40px;
+  max-width: 82px;
+  min-height: 24px;
   transform: translate(-50%, -50%);
   border: 1px solid rgba(255, 211, 106, 0.65);
   background: rgba(8, 10, 11, 0.66);
@@ -161,6 +224,29 @@ meter::-webkit-meter-optimum-value {
   font-weight: 900;
   line-height: 1;
   text-shadow: 0 1px 5px #000;
+}
+
+.enemy-marker span {
+  display: block;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enemy-marker i {
+  display: block;
+  width: 30px;
+  height: 4px;
+  margin-top: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.enemy-marker i b {
+  display: block;
+  height: 100%;
+  background: #c73b32;
 }
 
 .enemy-marker.locked {
@@ -391,5 +477,13 @@ meter::-webkit-meter-optimum-value {
   #weapon,
   #message {
     max-width: none;
+  }
+
+  .hud-stack {
+    width: 100%;
+  }
+
+  #combat-hud {
+    grid-template-columns: 1fr;
   }
 }
