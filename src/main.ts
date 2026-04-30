@@ -1,10 +1,24 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { createProceduralMusicManager } from "./musicManager.js";
+import {
+  combatBindings,
+  createWeapons,
+  enemyModelConfigs,
+  enemyNameParts,
+  enemyTypes,
+  movementBindings,
+  physics,
+  statDescriptions,
+  systemBindings,
+} from "./config/gameData.js";
+import { deterministicRand as rand } from "./core/random.js";
+import type { GameContext, GameState } from "./core/types.js";
+import { addLights } from "./rendering/lights.js";
+import { createMaterials } from "./rendering/materials.js";
+import { createAudioFacade } from "./systems/audioFacade.js";
+import { createHudController } from "./systems/hudController.js";
 
-const qs = <T extends Element = HTMLElement>(selector: string) => document.querySelector(selector) as T;
-
-const canvas = qs<HTMLCanvasElement>("#game");
+const canvas = document.querySelector("#game") as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
 renderer.shadowMap.enabled = true;
@@ -16,66 +30,10 @@ scene.fog = new THREE.FogExp2(0x070809, 0.018);
 
 const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 700);
 const clock = new THREE.Clock();
+const hud = createHudController();
+const audio = createAudioFacade();
 
-const hud = {
-  meters: {
-    hp: qs("#hp"),
-    stamina: qs("#stamina"),
-    sanity: qs("#sanity"),
-    decay: qs("#decay"),
-    goon: qs("#goon"),
-  },
-  meterValues: {
-    hp: qs('[data-value="hp"]'),
-    stamina: qs('[data-value="stamina"]'),
-    sanity: qs('[data-value="sanity"]'),
-    decay: qs('[data-value="decay"]'),
-    goon: qs('[data-value="goon"]'),
-  },
-  stats: qs("#stats"),
-  weapon: qs("#weapon"),
-  weaponAmmo: qs("#weapon-ammo"),
-  weaponDetail: qs("#weapon-detail"),
-  weaponHeat: qs("#weapon-heat"),
-  message: qs("#message"),
-  routeProgress: qs("#route-progress"),
-  death: qs("#death"),
-  codex: qs("#codex"),
-  controls: qs("#controls"),
-  closeCodex: qs("#close-codex"),
-  closeControls: qs("#close-controls"),
-  movementBindings: qs("#movement-bindings"),
-  combatBindings: qs("#combat-bindings"),
-  controlsMovement: qs("#controls-movement"),
-  controlsCombat: qs("#controls-combat"),
-  controlsSystem: qs("#controls-system"),
-  statHelp: qs("#stat-help"),
-  characterStats: qs("#character-stats"),
-  equipmentList: qs("#equipment-list"),
-  statusList: qs("#status-list"),
-  upgradeLog: qs("#upgrade-log"),
-  deckTitle: qs("#deck-title"),
-  lockStatus: qs("#lock-status"),
-  lockToggle: qs("#lock-toggle"),
-  debugCollisionToggle: qs("#debug-collision-toggle"),
-  combatHud: qs("#combat-hud"),
-  enemyIndicators: qs("#enemy-indicators"),
-  radarBlips: qs("#radar-blips"),
-  quickKitCount: qs(".quick-slot.active small"),
-};
-
-function setHudBar(element, value, max = 100) {
-  if (!element) return;
-  const pct = max <= 0 ? 0 : THREE.MathUtils.clamp((value / max) * 100, 0, 100);
-  element.style.setProperty("--value", `${pct.toFixed(1)}%`);
-}
-
-function setHudMeter(name, value, max = 100, display = `${Math.floor(value)} / ${max}`) {
-  setHudBar(hud.meters[name], value, max);
-  if (hud.meterValues[name]) hud.meterValues[name].textContent = display;
-}
-
-const keys = new Set();
+const keys = new Set<string>();
 const pointer = { locked: false, yaw: 0, pitch: -0.18 };
 const input = { left: false, right: false };
 const tmp = new THREE.Vector3();
@@ -83,56 +41,7 @@ const lock = { target: null, marker: null, enabled: true };
 const gltfLoader = new GLTFLoader();
 const enemyModelCache = new Map();
 
-const enemyModelConfigs = {
-  zealot: {
-    url: "./Artsource/Meshy_AI_Fallen_Reaver_0430014145_texture.glb",
-    height: 2.45,
-    yaw: Math.PI,
-  },
-  seraphRifle: {
-    url: "./Artsource/Meshy_AI_Cherubim_Lancer_0430014137_texture.glb",
-    height: 2.55,
-    yaw: Math.PI,
-  },
-  womb: {
-    url: "./Artsource/Meshy_AI_Orphan_of_the_Choir_0430014409_texture.glb",
-    height: 3.25,
-    yaw: Math.PI,
-  },
-  splitter: {
-    url: "./Artsource/Meshy_AI_Judgment_Bearer_0430014155_texture.glb",
-    height: 2.35,
-    yaw: Math.PI,
-  },
-  charger: {
-    url: "./Artsource/Meshy_AI_Eye_of_the_Throne_0430014753_texture.glb",
-    height: 2.8,
-    yaw: Math.PI,
-  },
-};
-
-const materials = {
-  moon: new THREE.MeshStandardMaterial({ color: 0x2a2a29, roughness: 0.96, metalness: 0.04 }),
-  ash: new THREE.MeshStandardMaterial({ color: 0x111315, roughness: 0.9, metalness: 0.1 }),
-  hull: new THREE.MeshStandardMaterial({ color: 0x303941, roughness: 0.74, metalness: 0.56 }),
-  hullDark: new THREE.MeshStandardMaterial({ color: 0x11171b, roughness: 0.9, metalness: 0.42 }),
-  rust: new THREE.MeshStandardMaterial({ color: 0x7b3827, roughness: 0.86, metalness: 0.24 }),
-  bone: new THREE.MeshStandardMaterial({ color: 0xb8ac95, roughness: 0.66, metalness: 0.08 }),
-  ember: new THREE.MeshStandardMaterial({ color: 0xff6f31, emissive: 0x9d1d0a, emissiveIntensity: 1.2 }),
-  violet: new THREE.MeshStandardMaterial({ color: 0x68458f, emissive: 0x271047, emissiveIntensity: 0.8 }),
-  cyan: new THREE.MeshStandardMaterial({ color: 0x7bd4ff, emissive: 0x0a4d76, emissiveIntensity: 0.85 }),
-  poison: new THREE.MeshStandardMaterial({ color: 0x8bff79, emissive: 0x184f12, emissiveIntensity: 0.7 }),
-  player: new THREE.MeshStandardMaterial({ color: 0xc7c1ac, roughness: 0.46, metalness: 0.28 }),
-  blade: new THREE.MeshStandardMaterial({ color: 0xd9e5e7, roughness: 0.28, metalness: 0.76 }),
-  tracer: new THREE.MeshBasicMaterial({ color: 0xffd36a }),
-  hostileTracer: new THREE.MeshBasicMaterial({ color: 0xb45cff }),
-  lock: new THREE.MeshBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0.82 }),
-  laser: new THREE.MeshBasicMaterial({ color: 0xff304f }),
-  collisionBox: new THREE.MeshBasicMaterial({ color: 0xff4a4a, wireframe: true, transparent: true, opacity: 0.72, depthTest: false }),
-  collisionCircle: new THREE.MeshBasicMaterial({ color: 0xffd36a, wireframe: true, transparent: true, opacity: 0.82, depthTest: false }),
-  collisionPlayer: new THREE.MeshBasicMaterial({ color: 0x7bd4ff, wireframe: true, transparent: true, opacity: 0.9, depthTest: false }),
-  collisionEnemy: new THREE.MeshBasicMaterial({ color: 0xb45cff, wireframe: true, transparent: true, opacity: 0.78, depthTest: false }),
-};
+const materials = createMaterials();
 
 const player = {
   group: new THREE.Group(),
@@ -160,37 +69,7 @@ const player = {
   dead: false,
 };
 
-const weapons = [
-  { name: "Reliquary Gunblade", mode: "folded", damage: 30, fireRate: 0.2, reach: 3.7, projectileSpeed: 92, multishot: 1, pierce: 0, orbitals: 0, chain: 0, upgrades: [] },
-  { name: "Choir Cannon", mode: "rifle", damage: 22, fireRate: 0.14, reach: 2.5, projectileSpeed: 110, multishot: 1, pierce: 1, orbitals: 0, chain: 0, upgrades: [] },
-  { name: "Mass Driver Sabre", mode: "assault", damage: 42, fireRate: 0.42, reach: 4.8, projectileSpeed: 72, multishot: 2, pierce: 0, orbitals: 0, chain: 0, upgrades: [] },
-];
-
-const enemyTypes = {
-  zealot: { label: "Zealot", hp: 44, speed: 3.7, damage: 13, range: 1.8, color: "bone", attack: "melee" },
-  seraphRifle: { label: "Seraph Rifle", hp: 36, speed: 2.8, damage: 10, range: 27, color: "violet", attack: "shoot" },
-  womb: { label: "Womb Gate", hp: 75, speed: 1.5, damage: 8, range: 20, color: "poison", attack: "spawn" },
-  splitter: { label: "Split Halo", hp: 40, speed: 3.2, damage: 11, range: 2.2, color: "cyan", attack: "split" },
-  charger: { label: "Throne Charger", hp: 60, speed: 4.9, damage: 18, range: 3.2, color: "rust", attack: "charge" },
-  laserSentry: { label: "Beam Reliquary", hp: 88, speed: 0, damage: 16, range: 38, color: "ember", attack: "laser", stationary: true },
-  auraSpire: { label: "Choir Spire", hp: 110, speed: 0, damage: 7, range: 24, color: "poison", attack: "aura", stationary: true },
-  skitter: { label: "Skitter", hp: 18, speed: 5.2, damage: 6, range: 1.3, color: "cyan", attack: "melee", minion: true },
-};
-
-const enemyNameParts = {
-  prefixes: ["Ash", "Vile", "Grief", "Null", "Rust", "Pale", "Black", "Choir", "Gore", "Hollow", "Iron", "Moon"],
-  names: ["Azra", "Malvek", "Iosef", "Seren", "Vath", "Orison", "Khar", "Morrow", "Eidra", "Thorne", "Calix", "Nema"],
-  titles: {
-    zealot: ["the Penitent", "of the Last Bell", "the Shattered", "of Bone"],
-    seraphRifle: ["the Far Choir", "of the Sightline", "the Lancer", "of Glass"],
-    womb: ["the Gate-Mother", "of the Breach", "the Swollen", "of the Ninth Door"],
-    splitter: ["the Divided", "of the Split Halo", "the Twice-Born", "of Fractures"],
-    charger: ["the Crownbreaker", "of the Red Impact", "the Ram", "of Iron Teeth"],
-    laserSentry: ["the Watcher", "of the Burning Line", "the Fixed Eye", "of Judgment"],
-    auraSpire: ["the Cantor", "of the Green Hymn", "the Choir Nail", "of Rotten Grace"],
-    skitter: ["the Small", "of the Underdeck", "the Gnawing", "of Static"],
-  },
-};
+const weapons = createWeapons();
 
 const enemies = [];
 const projectiles = [];
@@ -212,87 +91,71 @@ let enemyNameSerial = 1;
 let waveHostileCount = 0;
 let portal = null;
 let portalActive = false;
-let audioContext = null;
-let audioUnlocked = false;
-let musicManager = null;
-let musicStateKey = "";
 
-const physics = {
-  gravity: 34,
-  playerRadius: 0.72,
-  playerHeight: 1.1,
-  enemyRadius: 0.9,
-  enemyHeight: 0.82,
+const gameState: GameState = {
+  keys,
+  pointer,
+  input,
+  lock,
+  player,
+  weapons,
+  enemies,
+  projectiles,
+  impacts,
+  levelObjects,
+  colliders,
+  floorZones,
+  spawnPoints,
+  debugCollision,
+  get wave() {
+    return wave;
+  },
+  set wave(value) {
+    wave = value;
+  },
+  get levelSeed() {
+    return levelSeed;
+  },
+  set levelSeed(value) {
+    levelSeed = value;
+  },
+  get enemyNameSerial() {
+    return enemyNameSerial;
+  },
+  set enemyNameSerial(value) {
+    enemyNameSerial = value;
+  },
+  get waveHostileCount() {
+    return waveHostileCount;
+  },
+  set waveHostileCount(value) {
+    waveHostileCount = value;
+  },
+  get portal() {
+    return portal;
+  },
+  set portal(value) {
+    portal = value;
+  },
+  get portalActive() {
+    return portalActive;
+  },
+  set portalActive(value) {
+    portalActive = value;
+  },
 };
 
-const movementBindings = [
-  ["Move Forward", "W"],
-  ["Move Back", "S"],
-  ["Move Left", "A"],
-  ["Move Right", "D"],
-  ["Boost", "Tab"],
-  ["Quick Boost", "Shift"],
-  ["Jump / Ascend", "Space"],
-  ["Assault Boost", "Ctrl"],
-];
-
-const combatBindings = [
-  ["Left Hand Weapon", "LMB"],
-  ["Right Hand Weapon", "RMB"],
-  ["Left Shoulder Weapon", "Q"],
-  ["Right Shoulder Weapon", "E"],
-  ["Shift Control", "R"],
-  ["Toggle Lock-On", "T / HUD"],
-  ["Auto Lock-On", "Automatic"],
-];
-
-const systemBindings = [
-  ["Character Menu", "H / F"],
-  ["Control Scheme", "M"],
-  ["Close Menu", "Esc"],
-  ["Repair Kit", "C"],
-  ["Scan", "V"],
-  ["Purge Weapon", "P"],
-  ["Cycle Weapon", "Arrow Left / Arrow Right"],
-  ["Collision Debug View", "F3 / HUD"],
-  ["Restart Run", "Backspace"],
-  ["Mouse Lock", "Click Canvas"],
-];
-
-const statDescriptions = [
-  ["Age", "Clone age. Rises between levels and after death; old pilots gain grit but lose clean speed."],
-  ["Decay", "Body and suit corrosion. Higher decay drains sanity faster and mutates future upgrades."],
-  ["Speed", "Base movement before boost, weapon weight, and decay penalties."],
-  ["INT", "Improves projectiles, chain effects, scan quality, and weird weapon functions."],
-  ["STR", "Improves melee damage, stagger, assault boost impact, and heavy weapon handling."],
-  ["Grit", "Flat damage resistance and repair efficiency."],
-  ["Sanity", "Falls around horrors. At zero, the run ends even if HP remains."],
-  ["Goon", "Aggression pressure. Builds through violence and fuels some upgrades, but makes enemies bolder."],
-  ["Luck", "Raises odds of rare upgrades and chaotic enemy mutations."],
-];
-
-function addLights() {
-  scene.add(new THREE.HemisphereLight(0x667080, 0x100b08, 0.55));
-
-  const sun = new THREE.DirectionalLight(0xd8e6ff, 2.1);
-  sun.position.set(-80, 140, -40);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -130;
-  sun.shadow.camera.right = 130;
-  sun.shadow.camera.top = 130;
-  sun.shadow.camera.bottom = -130;
-  scene.add(sun);
-
-  const wound = new THREE.PointLight(0xff4b22, 180, 90, 2);
-  wound.position.set(22, 16, -18);
-  scene.add(wound);
-}
-
-function rand(seed) {
-  const x = Math.sin(seed * 999.13) * 43758.5453;
-  return x - Math.floor(x);
-}
+const gameContext: GameContext = {
+  canvas,
+  renderer,
+  scene,
+  camera,
+  clock,
+  materials,
+  hud,
+  audio,
+  state: gameState,
+};
 
 function pickEnemyNamePart(parts, seed) {
   return parts[Math.floor(rand(seed) * parts.length) % parts.length];
@@ -308,16 +171,6 @@ function makeEnemyName(typeName, x, z, tier) {
   return `${prefix} ${name} ${title}`;
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#39;",
-  })[char]);
-}
-
 function addLevelObject(object) {
   levelObjects.push(object);
   scene.add(object);
@@ -327,173 +180,33 @@ function markCollisionDebugDirty() {
   debugCollision.dirty = true;
 }
 
-function unlockAudio() {
-  if (audioUnlocked) return;
-  const AudioCtor = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtor) return;
-  audioContext ??= new AudioCtor();
-  if (audioContext.state === "suspended") audioContext.resume();
-  audioUnlocked = true;
-  startMusic();
-}
-
-function deckMusicName() {
-  if (portalActive) return "victory";
-  if (enemies.length > 0) return player.sanity < 42 || enemies.length > Math.max(4, waveHostileCount * 0.45) ? "combat" : "sanctum";
-  return wave % 3 === 0 ? "sanctum" : "derelict";
-}
-
-function deckMusicSettings() {
-  const expectedHostiles = Math.max(5, waveHostileCount || 5 + Math.floor(wave * 1.8));
-  const pressure = THREE.MathUtils.clamp(enemies.length / expectedHostiles, 0, 1);
-  const lowSanity = THREE.MathUtils.clamp((78 - player.sanity) / 78, 0, 1);
-  const lowHp = THREE.MathUtils.clamp((72 - player.hp) / 72, 0, 1);
-  const deckHeat = THREE.MathUtils.clamp(wave / 9, 0, 1);
-  const actionHeat = input.left || input.right ? 1 : keys.has("ShiftLeft") || keys.has("ShiftRight") ? 0.65 : 0;
-  const goonHeat = THREE.MathUtils.clamp(player.goon / 100, 0, 1);
-  const seedVariance = (Math.sin(levelSeed * 7.31 + wave * 1.73) + 1) * 0.5;
-  const danger = portalActive
-    ? 0.16
-    : THREE.MathUtils.clamp(0.26 + pressure * 0.42 + lowSanity * 0.27 + lowHp * 0.2 + deckHeat * 0.18 + actionHeat * 0.1, 0.18, 0.98);
-
+function audioSnapshot() {
   return {
-    danger,
-    density: portalActive
-      ? 0.6
-      : THREE.MathUtils.clamp(0.54 + pressure * 0.3 + goonHeat * 0.16 + deckHeat * 0.12 + actionHeat * 0.1, 0.44, 0.98),
-    drive: portalActive
-      ? 0.36
-      : THREE.MathUtils.clamp(0.48 + pressure * 0.34 + goonHeat * 0.2 + actionHeat * 0.18 + deckHeat * 0.1, 0.38, 1),
-    chaos: portalActive
-      ? 0.18
-      : THREE.MathUtils.clamp(0.12 + lowSanity * 0.35 + pressure * 0.2 + deckHeat * 0.16 + seedVariance * 0.14, 0.08, 0.86),
-    brightness: portalActive
-      ? 0.82
-      : THREE.MathUtils.clamp(0.34 + goonHeat * 0.16 + deckHeat * 0.1 + (1 - lowSanity) * 0.12, 0.26, 0.74),
-    bpm: Math.round(portalActive
-      ? 104 + Math.min(18, wave * 2)
-      : enemies.length > 0
-        ? 118 + wave * 4 + pressure * 36 + danger * 20 + actionHeat * 10
-        : 88 + wave * 2.5 + lowSanity * 12),
-    bars: portalActive ? 4 : 8,
+    player,
+    wave,
+    waveHostileCount,
+    enemiesLength: enemies.length,
+    portalActive,
+    input,
+    keys,
+    levelSeed,
   };
 }
 
-function deckMusicSeed() {
-  return Math.floor(levelSeed * 1000 + wave * 7919 + Math.floor(player.kills / 2) * 313 + Math.floor(player.decay * 10) * 29);
+function unlockAudio() {
+  audio.unlockAudio(audioSnapshot());
 }
 
 function updateMusic(force = false) {
-  if (!musicManager) return;
-  const palette = deckMusicName();
-  const settings = deckMusicSettings();
-  const stateKey = [
-    palette,
-    wave,
-    Math.floor(enemies.length / 2),
-    Math.floor(player.kills / 3),
-    Math.round(settings.danger * 12),
-    Math.round(settings.density * 12),
-    Math.round(settings.drive * 12),
-    Math.round(settings.chaos * 10),
-    Math.round(settings.bpm / 4),
-    portalActive ? "portal" : "deck",
-  ].join(":");
-  if (!force && stateKey === musicStateKey) return;
-  musicStateKey = stateKey;
-  musicManager.setSeed(deckMusicSeed());
-  musicManager.setPalette(palette, settings);
+  audio.updateMusic(audioSnapshot(), force);
 }
 
 function startMusic() {
-  if (!audioContext) return;
-  musicManager ??= createProceduralMusicManager({
-    audioContext,
-    seed: deckMusicSeed(),
-    masterVolume: 0.34,
-    palette: deckMusicName(),
-  });
-  updateMusic(true);
-  if (!musicManager.started) musicManager.start().catch(() => {});
+  audio.startMusic(audioSnapshot());
 }
 
-function playTone({ frequency = 220, endFrequency = frequency, duration = 0.16, type = "sine", volume = 0.14, delay = 0, filter = null }) {
-  if (!audioUnlocked || !audioContext) return;
-  const now = audioContext.currentTime + delay;
-  const oscillator = audioContext.createOscillator();
-  const gain = audioContext.createGain();
-  const destination = filter ? audioContext.createBiquadFilter() : gain;
-
-  oscillator.type = type;
-  oscillator.frequency.setValueAtTime(frequency, now);
-  oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, endFrequency), now + duration);
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(volume, now + 0.012);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
-  if (filter) {
-    filterNodeSetup(destination, filter, now, duration);
-    oscillator.connect(destination);
-    destination.connect(gain);
-  } else {
-    oscillator.connect(gain);
-  }
-
-  gain.connect(audioContext.destination);
-  oscillator.start(now);
-  oscillator.stop(now + duration + 0.03);
-}
-
-function filterNodeSetup(node, filter, now, duration) {
-  node.type = filter.type ?? "lowpass";
-  node.frequency.setValueAtTime(filter.frequency ?? 900, now);
-  node.frequency.exponentialRampToValueAtTime(Math.max(20, filter.endFrequency ?? filter.frequency ?? 900), now + duration);
-  node.Q.value = filter.q ?? 1;
-}
-
-function playNoise({ duration = 0.12, volume = 0.12, delay = 0, filter = 1400 } = {}) {
-  if (!audioUnlocked || !audioContext) return;
-  const now = audioContext.currentTime + delay;
-  const buffer = audioContext.createBuffer(1, Math.max(1, Math.floor(audioContext.sampleRate * duration)), audioContext.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < data.length; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
-  const source = audioContext.createBufferSource();
-  const gain = audioContext.createGain();
-  const tone = audioContext.createBiquadFilter();
-  tone.type = "bandpass";
-  tone.frequency.value = filter;
-  tone.Q.value = 0.8;
-  gain.gain.setValueAtTime(volume, now);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-  source.buffer = buffer;
-  source.connect(tone);
-  tone.connect(gain);
-  gain.connect(audioContext.destination);
-  source.start(now);
-}
-
-function playSfx(name, intensity = 1) {
-  const volume = THREE.MathUtils.clamp(intensity, 0.45, 1.8);
-  if (name === "slash") {
-    playTone({ frequency: 180, endFrequency: 760, duration: 0.11, type: "sawtooth", volume: 0.075 * volume, filter: { type: "bandpass", frequency: 520, endFrequency: 1600, q: 2.2 } });
-    playNoise({ duration: 0.09, volume: 0.045 * volume, filter: 2200 });
-  } else if (name === "shot") {
-    playTone({ frequency: 90, endFrequency: 42, duration: 0.12, type: "square", volume: 0.08 * volume, filter: { type: "lowpass", frequency: 900, endFrequency: 160, q: 0.8 } });
-    playNoise({ duration: 0.07, volume: 0.07 * volume, filter: 1800 });
-  } else if (name === "shoulder") {
-    playTone({ frequency: 120, endFrequency: 55, duration: 0.24, type: "sawtooth", volume: 0.11 * volume, filter: { type: "lowpass", frequency: 1200, endFrequency: 180, q: 1.1 } });
-    playNoise({ duration: 0.18, volume: 0.09 * volume, filter: 900 });
-  } else if (name === "enemy") {
-    playTone({ frequency: 300, endFrequency: 110, duration: 0.16, type: "triangle", volume: 0.055 * volume, filter: { type: "bandpass", frequency: 760, endFrequency: 240, q: 1.8 } });
-  } else if (name === "hit") {
-    playTone({ frequency: 72, endFrequency: 38, duration: 0.1, type: "square", volume: 0.05 * volume, filter: { type: "lowpass", frequency: 650, endFrequency: 130, q: 0.7 } });
-    playNoise({ duration: 0.08, volume: 0.055 * volume, filter: 1200 });
-  } else if (name === "complete") {
-    playTone({ frequency: 164, endFrequency: 246, duration: 0.32, type: "sine", volume: 0.09 * volume });
-    playTone({ frequency: 246, endFrequency: 370, duration: 0.34, type: "triangle", volume: 0.07 * volume, delay: 0.08 });
-    playTone({ frequency: 370, endFrequency: 554, duration: 0.42, type: "sine", volume: 0.075 * volume, delay: 0.18 });
-    playNoise({ duration: 0.45, volume: 0.035 * volume, delay: 0.05, filter: 2600 });
-  }
+function playSfx(name: string, intensity = 1) {
+  audio.playSfx(name, intensity);
 }
 
 function particleMaterial(color, opacity = 0.95) {
@@ -1497,44 +1210,11 @@ function updateProjectiles(dt) {
 }
 
 function updateRadarBlips() {
-  if (!hud.radarBlips) return;
-  const center = 105.5;
-  const radius = 72;
-  const range = 92;
-  const sin = Math.sin(pointer.yaw);
-  const cos = Math.cos(pointer.yaw);
-
-  hud.radarBlips.innerHTML = enemies.map((enemy) => {
-    const offset = enemy.group.position.clone().sub(player.group.position);
-    const localX = offset.x * cos - offset.z * sin;
-    const localZ = offset.x * sin + offset.z * cos;
-    const distance = Math.hypot(localX, localZ);
-    const amount = Math.min(1, distance / range);
-    const angle = Math.atan2(localX, localZ);
-    const x = center + Math.sin(angle) * radius * amount;
-    const y = center - Math.cos(angle) * radius * amount;
-    const locked = enemy === lock.target ? " locked" : "";
-    const elite = enemy.stationary || enemy.buffed > 0 ? " elite" : "";
-    return `<i class="radar-blip${locked}${elite}" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px"></i>`;
-  }).join("");
+  hud.updateRadarBlips({ enemies, player, lockTarget: lock.target, pointerYaw: pointer.yaw });
 }
 
 function updateEnemyIndicators() {
-  updateRadarBlips();
-  if (!hud.enemyIndicators) return;
-  hud.enemyIndicators.innerHTML = enemies.map((enemy) => {
-    const pos = enemy.group.position.clone().add(new THREE.Vector3(0, 1.2, 0)).project(camera);
-    if (pos.z < -1 || pos.z > 1) return "";
-    const x = THREE.MathUtils.clamp((pos.x * 0.5 + 0.5) * window.innerWidth, 14, window.innerWidth - 14);
-    const y = THREE.MathUtils.clamp((-pos.y * 0.5 + 0.5) * window.innerHeight, 14, window.innerHeight - 14);
-    const distance = enemy.group.position.distanceTo(player.group.position);
-    const locked = enemy === lock.target ? " locked" : "";
-    const elite = enemy.stationary || enemy.buffed > 0 ? " elite" : "";
-    const shortCode = enemy.typeName === "laserSentry" ? "LAS" : enemy.typeName === "auraSpire" ? "AUR" : enemy.minion ? "MIN" : Math.ceil(distance);
-    const label = locked || elite ? enemy.name.split(" ")[1] : shortCode;
-    const hp = THREE.MathUtils.clamp((enemy.hp / enemy.maxHp) * 100, 0, 100);
-    return `<div class="enemy-marker${locked}${elite}" title="${escapeHtml(enemy.displayName)}" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px"><span>${escapeHtml(label)}</span><i><b style="width:${hp.toFixed(1)}%"></b></i></div>`;
-  }).join("");
+  hud.updateEnemyIndicators({ enemies, player, lockTarget: lock.target, pointerYaw: pointer.yaw, camera });
 }
 
 function pulse(position, color) {
@@ -1806,126 +1486,53 @@ function updatePortal(dt) {
   if (Math.hypot(player.group.position.x - portal.position.x, player.group.position.z - portal.position.z) < 4.3) nextLevel();
 }
 
+function hudSnapshot() {
+  return {
+    player,
+    weapons,
+    enemies,
+    wave,
+    waveHostileCount,
+    portalActive,
+    input,
+    lock,
+    keys,
+    movementBindings,
+    combatBindings,
+    systemBindings,
+    statDescriptions,
+    weaponAttackRange,
+  };
+}
+
+function controlsSnapshot() {
+  return { movementBindings, combatBindings, systemBindings };
+}
+
 function toggleCodex(show = hud.codex.hidden) {
-  hud.codex.hidden = !show;
-  if (show) hud.controls.hidden = true;
-  if (show && document.pointerLockElement) document.exitPointerLock();
-  renderCodex();
+  hud.toggleCodex(show, hudSnapshot());
 }
 
 function toggleControls(show = hud.controls.hidden) {
-  hud.controls.hidden = !show;
-  if (show) hud.codex.hidden = true;
-  if (show && document.pointerLockElement) document.exitPointerLock();
-  renderControls();
+  hud.toggleControls(show, controlsSnapshot());
 }
 
 function renderControls() {
-  hud.controlsMovement.innerHTML = movementBindings.map(([label, key]) => `<div class="bind-row"><span>${label}</span><span class="keycap">${key}</span></div>`).join("");
-  hud.controlsCombat.innerHTML = combatBindings.map(([label, key]) => `<div class="bind-row"><span>${label}</span><span class="keycap">${key}</span></div>`).join("");
-  hud.controlsSystem.innerHTML = systemBindings.map(([label, key]) => `<div class="bind-row"><span>${label}</span><span class="keycap">${key}</span></div>`).join("");
+  hud.renderControls(controlsSnapshot());
 }
 
 function renderCodex() {
-  hud.movementBindings.innerHTML = movementBindings.map(([label, key]) => `<div class="bind-row"><span>${label}</span><span class="keycap">${key}</span></div>`).join("");
-  hud.combatBindings.innerHTML = [...combatBindings, ...systemBindings].map(([label, key]) => `<div class="bind-row"><span>${label}</span><span class="keycap">${key}</span></div>`).join("");
-  const weapon = weapons[player.weaponIndex];
-  const coreStats = [
-    ["HP", `${Math.max(0, Math.floor(player.hp))} / 100`],
-    ["Stamina", `${Math.floor(player.stamina)} / 100`],
-    ["Sanity", `${Math.max(0, Math.floor(player.sanity))} / 100`],
-    ["Goon", `${Math.floor(player.goon)} / 100`],
-    ["Age", Math.floor(player.age)],
-    ["Decay", player.decay.toFixed(1)],
-    ["Speed", player.speed.toFixed(1)],
-    ["INT", player.int],
-    ["STR", player.str],
-    ["Grit", player.grit],
-    ["Luck", player.luck],
-    ["Level", player.level],
-    ["Wave", wave],
-    ["Kills", player.kills],
-    ["Repair Kits", player.repairKits],
-    ["Attack Range", `${weaponAttackRange(weapon).toFixed(0)}m`],
-  ];
-  hud.characterStats.innerHTML = coreStats.map(([name, value]) => `<div><span>${name}</span><b>${value}</b></div>`).join("");
-  hud.equipmentList.innerHTML = weapons.map((item, index) => {
-    const equipped = index === player.weaponIndex ? "Equipped" : "Stored";
-    const upgrades = item.upgrades.length ? `${item.upgrades.length} upgrades` : "no upgrades";
-    return `<div><b>${equipped}: ${item.name}</b><span>Mode ${item.mode}; damage ${item.damage.toFixed(1)}; fire ${item.fireRate.toFixed(2)}s; reach ${item.reach.toFixed(1)}m; multishot ${item.multishot}; pierce ${item.pierce}; ${upgrades}</span></div>`;
-  }).join("");
-  const statusRows = [
-    ["Lock-On", lock.target ? `${lock.target.label} at ${lock.target.group.position.distanceTo(player.group.position).toFixed(0)}m` : "Searching for enemies in weapon range"],
-    ["Boost", keys.has("Tab") && player.stamina > 4 ? "Active" : "Ready"],
-    ["Assault Boost", (keys.has("ControlLeft") || keys.has("ControlRight")) && player.stamina > 18 ? "Active" : "Ready"],
-    ["Jump / Ascend", player.grounded ? "Grounded" : "Airborne"],
-    ["Invulnerability", player.invuln > 0 ? `${player.invuln.toFixed(1)}s` : "Inactive"],
-    ["Left-Hand Cooldown", player.attackCd > 0 ? `${player.attackCd.toFixed(2)}s` : "Ready"],
-    ["Right-Hand Cooldown", player.shotCd > 0 ? `${player.shotCd.toFixed(2)}s` : "Ready"],
-    ["Shoulder Cooldown", player.shoulderCd > 0 ? `${player.shoulderCd.toFixed(2)}s` : "Ready"],
-    ["Enemy Pressure", `${enemies.length} hostiles active`],
-  ];
-  hud.statusList.innerHTML = statusRows.map(([name, text]) => `<div><b>${name}</b><span>${text}</span></div>`).join("");
-  hud.statHelp.innerHTML = statDescriptions.map(([name, text]) => `<div><b>${name}</b><span>${text}</span></div>`).join("");
-  const upgrades = weapons.flatMap((weapon) => weapon.upgrades.map((upgrade) => [weapon.name, upgrade]));
-  hud.upgradeLog.innerHTML = upgrades.length
-    ? upgrades.map(([name, text]) => `<div><b>${name}</b><span>${text}</span></div>`).join("")
-    : `<div><b>No upgrades</b><span>Kill enemies to add unlimited randomized weapon and pilot functions.</span></div>`;
+  hud.renderCodex(hudSnapshot());
 }
 
 function updateHud() {
-  const weapon = weapons[player.weaponIndex];
-  setHudMeter("hp", Math.max(0, player.hp), 100, `${Math.max(0, Math.floor(player.hp))} / 100`);
-  setHudMeter("stamina", player.stamina, 100, `${Math.floor(player.stamina)} / 100`);
-  setHudMeter("sanity", Math.max(0, player.sanity), 100, `${Math.max(0, Math.floor(player.sanity))} / 100`);
-  setHudMeter("decay", player.decay, 40, `${player.decay.toFixed(1)}%`);
-  setHudMeter("goon", player.goon, 100, `${Math.floor(player.goon)} / 100`);
-  hud.weapon.textContent = weapon.name;
-  if (hud.weaponAmmo) hud.weaponAmmo.textContent = `${Math.round(weapon.damage)} / ${Math.round(weapon.projectileSpeed)}`;
-  if (hud.weaponDetail) hud.weaponDetail.textContent = `${weapon.mode} | Deck ${wave} | Hostiles ${enemies.length}`;
-  if (hud.weaponHeat) setHudBar(hud.weaponHeat, 100 - player.stamina * 0.55 + (input.left || input.right ? 24 : 0), 100);
-  if (hud.routeProgress) {
-    const defeated = Math.max(0, waveHostileCount - enemies.length);
-    setHudBar(hud.routeProgress, portalActive ? 100 : defeated, Math.max(1, waveHostileCount));
-  }
-  if (hud.quickKitCount) hud.quickKitCount.textContent = String(player.repairKits);
-  const combatRows: [string, string, number][] = [
-    ["LMB", weapon.mode === "rifle" ? "Bayonet" : "Left Weapon", player.attackCd],
-    ["RMB", weapon.mode === "folded" ? "Gunblade Fire" : weapon.name, player.shotCd],
-    ["Q", "Left Shoulder", player.shoulderCd],
-    ["E", "Right Shoulder", player.shoulderCd],
-    ["Shift", "Quick Boost", player.invuln],
-    ["Space", player.grounded ? "Jump Ready" : "Airborne", player.grounded ? 0 : 1],
-    ["T", lock.enabled ? "Lock-On On" : "Lock-On Off", 0],
-  ];
-  if (hud.combatHud) {
-    hud.combatHud.innerHTML = combatRows.map(([inputName, label, cd]) => {
-      const ready = cd <= 0;
-      const value = ready ? "READY" : `${cd.toFixed(1)}s`;
-      return `<div class="combat-slot ${ready ? "ready" : "cooling"}"><span class="keycap">${inputName}</span><b>${label}</b><em>${value}</em></div>`;
-    }).join("");
-  }
-  const statPairs: [string, string | number, number][] = [
-    ["AGE", Math.floor(player.age), 80],
-    ["STR", player.str, 40],
-    ["INT", player.int, 40],
-    ["SPD", player.speed.toFixed(1), 24],
-    ["DECAY", player.decay.toFixed(1), 40],
-    ["SANITY", Math.floor(player.sanity), 100],
-    ["GOON", Math.floor(player.goon), 100],
-  ];
-  hud.stats.innerHTML = statPairs.map(([k, v, max]) => {
-    const pct = THREE.MathUtils.clamp((Number(v) / max) * 100, 0, 100);
-    return `<div class="stat-row"><span>${k}</span><span class="stat-pips" style="--value:${pct.toFixed(1)}%"></span><b>${v}</b></div>`;
-  }).join("");
-  if (!hud.codex.hidden) renderCodex();
+  hud.update(hudSnapshot());
 }
 
 function die() {
   player.dead = true;
   hud.death.hidden = false;
-  musicManager?.stop({ fadeOut: 1.3 });
-  musicStateKey = "";
+  audio.stopMusic({ fadeOut: 1.3 });
 }
 
 function restart() {
@@ -1965,8 +1572,7 @@ function restart() {
   startMusic();
 }
 
-function tick() {
-  const dt = Math.min(0.033, clock.getDelta());
+function updateGameFrame(ctx: GameContext, dt: number) {
   updatePlayer(dt);
   updateProjectiles(dt);
   updateEnemies(dt);
@@ -1976,7 +1582,12 @@ function tick() {
   updateHud();
   updateCollisionDebug();
   updateMusic();
-  renderer.render(scene, camera);
+  ctx.renderer.render(ctx.scene, ctx.camera);
+}
+
+function tick() {
+  const dt = Math.min(0.033, gameContext.clock.getDelta());
+  updateGameFrame(gameContext, dt);
   requestAnimationFrame(tick);
 }
 
@@ -2057,7 +1668,7 @@ window.addEventListener("mouseup", (event) => {
 });
 window.addEventListener("contextmenu", (event) => event.preventDefault());
 
-addLights();
+addLights(scene);
 makeStars();
 makePlayer();
 preloadEnemyModels();
