@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const canvas = document.querySelector("#game");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -46,6 +47,36 @@ const pointer = { locked: false, yaw: 0, pitch: -0.18 };
 const input = { left: false, right: false };
 const tmp = new THREE.Vector3();
 const lock = { target: null, marker: null };
+const gltfLoader = new GLTFLoader();
+const enemyModelCache = new Map();
+
+const enemyModelConfigs = {
+  zealot: {
+    url: "./Artsource/Meshy_AI_Fallen_Reaver_0430014145_texture.glb",
+    height: 2.45,
+    yaw: Math.PI,
+  },
+  seraphRifle: {
+    url: "./Artsource/Meshy_AI_Cherubim_Lancer_0430014137_texture.glb",
+    height: 2.55,
+    yaw: Math.PI,
+  },
+  womb: {
+    url: "./Artsource/Meshy_AI_Orphan_of_the_Choir_0430014409_texture.glb",
+    height: 3.25,
+    yaw: Math.PI,
+  },
+  splitter: {
+    url: "./Artsource/Meshy_AI_Judgment_Bearer_0430014155_texture.glb",
+    height: 2.35,
+    yaw: Math.PI,
+  },
+  charger: {
+    url: "./Artsource/Meshy_AI_Eye_of_the_Throne_0430014753_texture.glb",
+    height: 2.8,
+    yaw: Math.PI,
+  },
+};
 
 const materials = {
   moon: new THREE.MeshStandardMaterial({ color: 0x2a2a29, roughness: 0.96, metalness: 0.04 }),
@@ -456,22 +487,85 @@ function makePlayer() {
   player.group.add(gun);
 }
 
-function makeEnemy(x, z, typeName = "zealot", tier = wave) {
-  const type = enemyTypes[typeName];
-  const variance = 0.84 + Math.random() * 0.42;
-  const group = new THREE.Group();
-  group.position.set(x, terrainHeight(x, z) + physics.enemyHeight, z);
-  scene.add(group);
+function prepareEnemyModelNode(node) {
+  if (!node.isMesh) return;
+  node.castShadow = true;
+  node.receiveShadow = true;
 
+  const materialsToTune = Array.isArray(node.material) ? node.material : [node.material];
+  for (const material of materialsToTune) {
+    if (!material) continue;
+    if ("roughness" in material) material.roughness = Math.max(material.roughness ?? 0.7, 0.48);
+    if ("metalness" in material) material.metalness = Math.min(material.metalness ?? 0.15, 0.45);
+  }
+}
+
+function loadEnemyModel(config) {
+  const cached = enemyModelCache.get(config.url);
+  if (cached) return cached;
+
+  const request = gltfLoader.loadAsync(config.url)
+    .then((gltf) => {
+      const source = gltf.scene ?? gltf.scenes?.[0];
+      if (!source) throw new Error(`No scene found in ${config.url}`);
+      source.traverse(prepareEnemyModelNode);
+      return source;
+    })
+    .catch((error) => {
+      console.warn(`Enemy model failed to load: ${config.url}`, error);
+      return null;
+    });
+
+  enemyModelCache.set(config.url, request);
+  return request;
+}
+
+function normalizeEnemyModel(model, targetHeight) {
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const dominantSize = Math.max(size.x, size.y, size.z, 0.001);
+  model.scale.multiplyScalar(targetHeight / dominantSize);
+
+  box.setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.sub(center);
+}
+
+function attachEnemyModel(enemy) {
+  const config = enemyModelConfigs[enemy.typeName];
+  if (!config) return;
+
+  loadEnemyModel(config).then((source) => {
+    if (!source || !enemy.group.parent) return;
+
+    const holder = new THREE.Group();
+    const model = source.clone(true);
+    holder.name = `${enemy.typeName}-mesh`;
+    holder.rotation.set(config.pitch ?? 0, config.yaw ?? 0, config.roll ?? 0);
+    holder.add(model);
+    normalizeEnemyModel(model, config.height + Math.min(0.9, enemy.tier * 0.07));
+
+    enemy.visual.add(holder);
+    enemy.model = holder;
+    enemy.fallback.visible = false;
+  });
+}
+
+function preloadEnemyModels() {
+  for (const config of Object.values(enemyModelConfigs)) loadEnemyModel(config);
+}
+
+function makeProceduralEnemyVisual(typeName, type, tier) {
+  const visual = new THREE.Group();
   const mat = materials[type.color] ?? materials.bone;
   const coreSize = type.stationary ? 1.08 : type.minion ? 0.48 : 0.72 + tier * 0.025 + Math.random() * 0.22;
   const core = new THREE.Mesh(new THREE.IcosahedronGeometry(coreSize, typeName === "womb" || type.stationary ? 2 : 1), mat);
   core.castShadow = true;
-  group.add(core);
+  visual.add(core);
 
   const eye = new THREE.Mesh(new THREE.SphereGeometry(0.14 + Math.random() * 0.08, 12, 8), typeName === "seraphRifle" ? materials.ember : materials.violet);
   eye.position.set(0, 0.12, -0.72);
-  group.add(eye);
+  visual.add(eye);
 
   const wingCount = typeName === "womb" || type.stationary ? 10 : type.minion ? 3 : 5 + Math.floor(Math.random() * 5);
   for (let i = 0; i < wingCount; i += 1) {
@@ -480,12 +574,31 @@ function makeEnemy(x, z, typeName = "zealot", tier = wave) {
     wing.position.set(Math.cos(a) * 0.72, Math.sin(i) * 0.22, Math.sin(a) * 0.72);
     wing.rotation.set(Math.PI / 2, 0, -a);
     wing.castShadow = true;
-    group.add(wing);
+    visual.add(wing);
   }
 
-  enemies.push({
+  return visual;
+}
+
+function makeEnemy(x, z, typeName = "zealot", tier = wave) {
+  const type = enemyTypes[typeName];
+  const variance = 0.84 + Math.random() * 0.42;
+  const group = new THREE.Group();
+  group.position.set(x, terrainHeight(x, z) + physics.enemyHeight, z);
+  scene.add(group);
+
+  const visual = new THREE.Group();
+  const fallback = makeProceduralEnemyVisual(typeName, type, tier);
+  visual.add(fallback);
+  group.add(visual);
+
+  const enemy = {
     group,
+    visual,
+    fallback,
+    model: null,
     typeName,
+    tier,
     label: type.label,
     hp: (type.hp + tier * 7) * variance,
     maxHp: (type.hp + tier * 7) * variance,
@@ -505,7 +618,10 @@ function makeEnemy(x, z, typeName = "zealot", tier = wave) {
     yVelocity: 0,
     grounded: true,
     mutations: randomEnemyMutations(tier),
-  });
+  };
+
+  enemies.push(enemy);
+  attachEnemyModel(enemy);
 }
 
 function randomEnemyMutations(tier) {
@@ -835,13 +951,23 @@ function updateEnemies(dt) {
     enemy.spawnCd = Math.max(0, enemy.spawnCd - dt);
     enemy.auraFx = Math.max(0, enemy.auraFx - dt);
     applyGravity(enemy, dt, physics.enemyHeight);
-    enemy.group.rotation.y += dt * (enemy.mutations.includes("frantic") ? 3.4 : 1.7);
-    enemy.group.rotation.x = Math.sin(enemy.phase * 2) * 0.2;
 
     tmp.copy(player.group.position).sub(enemy.group.position).setY(0);
     const dist = tmp.length();
     const dir = tmp.normalize();
     const speed = enemy.stationary ? 0 : enemy.speed * (enemy.buffed ? 1.28 : 1) * (enemy.mutations.includes("fast") ? 1.35 : 1) * (enemy.mutations.includes("armored") ? 0.82 : 1);
+
+    if (enemy.model) {
+      const faceYaw = Math.atan2(-dir.x, -dir.z);
+      enemy.group.rotation.y = turnToward(enemy.group.rotation.y, faceYaw, Math.min(1, dt * 7));
+      enemy.group.rotation.x = Math.sin(enemy.phase * 3) * 0.045;
+      enemy.visual.position.y = Math.sin(enemy.phase * 4) * 0.12;
+      enemy.visual.rotation.z = Math.sin(enemy.phase * 2.8) * 0.035;
+    } else {
+      enemy.group.rotation.y += dt * (enemy.mutations.includes("frantic") ? 3.4 : 1.7);
+      enemy.group.rotation.x = Math.sin(enemy.phase * 2) * 0.2;
+      enemy.visual.position.y = 0;
+    }
 
     if (enemy.attack === "laser" && dist < enemy.range) {
       enemyLaser(enemy, dt);
@@ -1252,6 +1378,7 @@ window.addEventListener("contextmenu", (event) => event.preventDefault());
 addLights();
 makeStars();
 makePlayer();
+preloadEnemyModels();
 resize();
 generateLevel();
 spawnWave();
