@@ -11,12 +11,18 @@ import {
   statDescriptions,
   systemBindings,
 } from "./config/gameData.js";
+import { EntityManager } from "./core/gameObject.js";
 import { deterministicRand as rand } from "./core/random.js";
 import type { GameContext, GameState } from "./core/types.js";
+import { EffectFactory } from "./objects/effects.js";
+import { EnemyFactory } from "./objects/enemies.js";
+import { ProjectileFactory } from "./objects/projectiles.js";
 import { addLights } from "./rendering/lights.js";
 import { createMaterials } from "./rendering/materials.js";
 import { createAudioFacade } from "./systems/audioFacade.js";
+import { EnemyDirector } from "./systems/enemyDirector.js";
 import { createHudController } from "./systems/hudController.js";
+import { ProjectileSystem } from "./systems/projectileSystem.js";
 
 const canvas = document.querySelector("#game") as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -42,6 +48,9 @@ const gltfLoader = new GLTFLoader();
 const enemyModelCache = new Map();
 
 const materials = createMaterials();
+const entities = new EntityManager();
+const effectFactory = new EffectFactory(entities);
+const projectileFactory = new ProjectileFactory(entities);
 
 const player = {
   group: new THREE.Group(),
@@ -71,10 +80,10 @@ const player = {
 
 const weapons = createWeapons();
 
-const enemies = [];
-const projectiles = [];
-const impacts = [];
-const levelObjects = [];
+const enemies = entities.enemies;
+const projectiles = entities.projectiles;
+const impacts = entities.effects;
+const levelObjects = entities.levelObjects;
 const colliders = [];
 const floorZones = [];
 const spawnPoints = [];
@@ -102,6 +111,7 @@ const gameState: GameState = {
   enemies,
   projectiles,
   impacts,
+  effects: impacts,
   levelObjects,
   colliders,
   floorZones,
@@ -154,8 +164,53 @@ const gameContext: GameContext = {
   materials,
   hud,
   audio,
+  entities,
+  effectFactory,
+  tmpVector: tmp,
   state: gameState,
 };
+const projectileSystem = new ProjectileSystem({
+  projectiles,
+  enemies,
+  colliders,
+  player,
+  materials,
+  entities,
+  effectFactory,
+  playSfx,
+});
+const enemyFactory = new EnemyFactory(entities, {
+  scene,
+  materials,
+  physics,
+  enemyTypes,
+  nearestFloorZone,
+  isSafeSpawnPoint,
+  findSafePoint,
+  terrainHeight,
+  makeEnemyName,
+  attachEnemyModel,
+});
+const enemyDirector = new EnemyDirector({
+  enemies,
+  spawnPoints,
+  player,
+  hud,
+  physics,
+  findSafePoint,
+  makeEnemy,
+  updateMusic,
+  applyGravity,
+  turnToward,
+  enemyLaser,
+  enemySpawn,
+  enemyShoot,
+  enemyMelee,
+  resolveCircleCollision,
+  terrainHeight,
+  killEnemy,
+  openPortal,
+});
 
 function pickEnemyNamePart(parts, seed) {
   return parts[Math.floor(rand(seed) * parts.length) % parts.length];
@@ -172,7 +227,7 @@ function makeEnemyName(typeName, x, z, tier) {
 }
 
 function addLevelObject(object) {
-  levelObjects.push(object);
+  entities.addLevelObject(object);
   scene.add(object);
 }
 
@@ -209,62 +264,24 @@ function playSfx(name: string, intensity = 1) {
   audio.playSfx(name, intensity);
 }
 
-function particleMaterial(color, opacity = 0.95) {
-  return new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
-}
-
 function addSpark(position, velocity, color, size, life) {
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(size, 6, 4), particleMaterial(color));
-  mesh.position.copy(position);
-  scene.add(mesh);
-  impacts.push({
-    mesh,
-    life,
-    maxLife: life,
-    velocity,
-    gravity: 7.5,
-    spin: new THREE.Vector3(Math.random() * 4, Math.random() * 4, Math.random() * 4),
-    disposeMaterial: true,
-    disposeGeometry: true,
-  });
+  effectFactory.spark(gameContext, position, velocity, color, size, life);
 }
 
 function burstParticles(position, color, count = 12, power = 5, size = 0.055, yBias = 1.1) {
-  for (let i = 0; i < count; i += 1) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = power * (0.45 + Math.random() * 0.9);
-    const velocity = new THREE.Vector3(
-      Math.cos(angle) * speed,
-      yBias + Math.random() * power * 0.55,
-      Math.sin(angle) * speed,
-    );
-    addSpark(position.clone().add(new THREE.Vector3(0, 0.8 + Math.random() * 0.5, 0)), velocity, color, size * (0.7 + Math.random() * 0.8), 0.35 + Math.random() * 0.28);
-  }
+  effectFactory.burstParticles(gameContext, position, color, count, power, size, yBias);
 }
 
 function muzzleBurst(position, direction, color = 0xffd36a) {
-  for (let i = 0; i < 8; i += 1) {
-    const side = new THREE.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 0.7, (Math.random() - 0.5) * 1.2);
-    const velocity = direction.clone().multiplyScalar(7 + Math.random() * 7).add(side);
-    addSpark(position.clone().add(direction.clone().multiplyScalar(0.7)), velocity, color, 0.045 + Math.random() * 0.035, 0.18 + Math.random() * 0.14);
-  }
+  effectFactory.muzzleBurst(gameContext, position, direction, color);
 }
 
 function slashArc(position, direction) {
-  const origin = position.clone().add(new THREE.Vector3(0, 1.1, 0)).add(direction.clone().multiplyScalar(1.4));
-  const right = new THREE.Vector3(-direction.z, 0, direction.x);
-  for (let i = -5; i <= 5; i += 1) {
-    const t = i / 5;
-    const point = origin.clone().add(right.clone().multiplyScalar(t * 1.3)).add(new THREE.Vector3(0, 0.35 * (1 - Math.abs(t)), 0));
-    const velocity = direction.clone().multiplyScalar(2.5).add(right.clone().multiplyScalar(t * 4)).add(new THREE.Vector3(0, 1.2, 0));
-    addSpark(point, velocity, 0xffc87a, 0.05, 0.24 + Math.random() * 0.12);
-  }
+  effectFactory.slashArc(gameContext, position, direction);
 }
 
 function levelCompleteBurst(position) {
-  burstParticles(position, 0x7bd4ff, 34, 8.5, 0.075, 2.4);
-  burstParticles(position, 0xb45cff, 24, 6.8, 0.065, 2.1);
-  burstParticles(position, 0xffd36a, 18, 5.4, 0.055, 2.0);
+  effectFactory.levelCompleteBurst(gameContext, position);
 }
 
 function addBoxAsset(x, z, width, depth, height, material, blocks = true, y = height / 2) {
@@ -638,7 +655,7 @@ function addRoomWalls(zone, wallHeight, material) {
 }
 
 function generateLevel() {
-  for (const object of levelObjects.splice(0)) scene.remove(object);
+  entities.clearLevelObjects(gameContext);
   colliders.length = 0;
   markCollisionDebugDirty();
   floorZones.length = 0;
@@ -803,106 +820,12 @@ function preloadEnemyModels() {
   for (const config of Object.values(enemyModelConfigs)) loadEnemyModel(config);
 }
 
-function makeProceduralEnemyVisual(typeName, type, tier) {
-  const visual = new THREE.Group();
-  const mat = materials[type.color] ?? materials.bone;
-  const coreSize = type.stationary ? 1.08 : type.minion ? 0.48 : 0.72 + tier * 0.025 + Math.random() * 0.22;
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(coreSize, typeName === "womb" || type.stationary ? 2 : 1), mat);
-  core.castShadow = true;
-  visual.add(core);
-
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.14 + Math.random() * 0.08, 12, 8), typeName === "seraphRifle" ? materials.ember : materials.violet);
-  eye.position.set(0, 0.12, -0.72);
-  visual.add(eye);
-
-  const wingCount = typeName === "womb" || type.stationary ? 10 : type.minion ? 3 : 5 + Math.floor(Math.random() * 5);
-  for (let i = 0; i < wingCount; i += 1) {
-    const wing = new THREE.Mesh(new THREE.ConeGeometry(0.14 + Math.random() * 0.09, 1.7 + Math.random() * 1.4, 4), i % 2 ? materials.bone : materials.rust);
-    const a = (i / wingCount) * Math.PI * 2;
-    wing.position.set(Math.cos(a) * 0.72, Math.sin(i) * 0.22, Math.sin(a) * 0.72);
-    wing.rotation.set(Math.PI / 2, 0, -a);
-    wing.castShadow = true;
-    visual.add(wing);
-  }
-
-  return visual;
-}
-
 function makeEnemy(x, z, typeName = "zealot", tier = wave) {
-  const type = enemyTypes[typeName];
-  const spawnZone = nearestFloorZone(x, z);
-  const spawn = isSafeSpawnPoint(x, z, physics.enemyRadius)
-    ? { x, z }
-    : findSafePoint(spawnZone, physics.enemyRadius, { x, z });
-  const name = makeEnemyName(typeName, spawn.x, spawn.z, tier);
-  const variance = 0.84 + Math.random() * 0.42;
-  const group = new THREE.Group();
-  group.position.set(spawn.x, terrainHeight(spawn.x, spawn.z) + physics.enemyHeight, spawn.z);
-  scene.add(group);
-
-  const visual = new THREE.Group();
-  const fallback = makeProceduralEnemyVisual(typeName, type, tier);
-  visual.add(fallback);
-  group.add(visual);
-
-  const enemy = {
-    group,
-    visual,
-    fallback,
-    model: null,
-    typeName,
-    tier,
-    label: type.label,
-    name,
-    displayName: `${name}, ${type.label}`,
-    hp: (type.hp + tier * 7) * variance,
-    maxHp: (type.hp + tier * 7) * variance,
-    speed: (type.speed + tier * 0.08) * (0.86 + Math.random() * 0.28),
-    damage: (type.damage + tier * 1.25) * variance,
-    range: type.range + Math.random() * 4,
-    attack: type.attack,
-    stationary: type.stationary ?? false,
-    minion: type.minion ?? false,
-    cooldown: 0.4 + Math.random() * 1.8,
-    hitCd: 0,
-    spawnCd: 3 + Math.random() * 3,
-    laserTick: 0,
-    auraFx: 0,
-    buffed: 0,
-    phase: Math.random() * 10,
-    yVelocity: 0,
-    grounded: true,
-    mutations: randomEnemyMutations(tier),
-  };
-
-  enemies.push(enemy);
-  attachEnemyModel(enemy);
-}
-
-function randomEnemyMutations(tier) {
-  const pool = ["barbed", "fast", "rotting", "armored", "frantic", "sanity-leech"];
-  const count = Math.min(3, Math.floor(Math.random() * (1 + tier / 3)));
-  const picked = [];
-  while (picked.length < count) {
-    const next = pool[Math.floor(Math.random() * pool.length)];
-    if (!picked.includes(next)) picked.push(next);
-  }
-  return picked;
+  enemyFactory.create(x, z, typeName, tier);
 }
 
 function spawnWave() {
-  const count = 5 + Math.floor(wave * 1.8);
-  waveHostileCount = count;
-  for (let i = 0; i < count; i += 1) {
-    const spawn = spawnPoints[1 + (i % Math.max(1, spawnPoints.length - 1))] ?? spawnPoints[0] ?? { x: 0, z: 0, room: { w: 70, d: 70 } };
-    const room = spawn.room ?? { w: 70, d: 70 };
-    const safe = findSafePoint(room, physics.enemyRadius, spawn);
-    const unlocked = ["zealot", "splitter", "charger", "seraphRifle", "womb", "laserSentry", "auraSpire"].slice(0, Math.min(7, 2 + Math.floor(wave / 2)));
-    const type = i === 0 && wave >= 2 ? "laserSentry" : i === 1 && wave >= 3 ? "auraSpire" : unlocked[Math.floor(Math.random() * unlocked.length)];
-    makeEnemy(safe.x, safe.z, type, wave);
-  }
-  hud.message.textContent = `Deck ${wave}: follow the route through ${spawnPoints.length} rooms and exterior breaches.`;
-  updateMusic(true);
+  enemyDirector.spawnWave(gameContext);
 }
 
 function playerForward() {
@@ -1112,7 +1035,7 @@ function rightHand() {
   for (let i = 0; i < shots; i += 1) {
     const spread = (i - (shots - 1) / 2) * 0.08;
     const dir = base.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), spread).normalize();
-    projectiles.push({ owner: "player", pos: origin.clone(), dir, life: 1.25, damage: weapon.damage * 0.72 + player.int * 0.75, speed: weapon.projectileSpeed, pierce: weapon.pierce, radius: 1.25 });
+    projectileFactory.create({ owner: "player", pos: origin.clone(), dir, life: 1.25, damage: weapon.damage * 0.72 + player.int * 0.75, speed: weapon.projectileSpeed, pierce: weapon.pierce, radius: 1.25 });
   }
 }
 
@@ -1126,7 +1049,7 @@ function shoulder(side) {
   for (let i = 0; i < count; i += 1) {
     const dir = playerForward().applyAxisAngle(new THREE.Vector3(0, 1, 0), (i - count / 2) * 0.13);
     if (i < 5) muzzleBurst(player.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), dir, side === "left" ? 0xffd36a : 0x7bd4ff);
-    projectiles.push({ owner: "player", pos: player.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), dir, life: 1.0, damage: 14 + player.int, speed: side === "left" ? 72 : 120, pierce: 0, radius: 1.15 });
+    projectileFactory.create({ owner: "player", pos: player.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), dir, life: 1.0, damage: 14 + player.int, speed: side === "left" ? 72 : 120, pierce: 0, radius: 1.15 });
   }
   hud.message.textContent = side === "left" ? "Left shoulder: flechette psalm." : "Right shoulder: rail hymn.";
 }
@@ -1142,71 +1065,7 @@ function chainDamage(source, jumps) {
 }
 
 function updateProjectiles(dt) {
-  for (let i = projectiles.length - 1; i >= 0; i -= 1) {
-    const p = projectiles[i];
-    const start = p.pos.clone();
-    p.pos.addScaledVector(p.dir, p.speed * dt);
-    p.life -= dt;
-    for (const collider of colliders) {
-      const blocked = collider.type === "circle"
-        ? Math.hypot(p.pos.x - collider.x, p.pos.z - collider.z) < collider.r
-        : Math.abs(p.pos.x - collider.x) < collider.w / 2 && Math.abs(p.pos.z - collider.z) < collider.d / 2;
-      if (blocked && p.pos.y < 6) p.life = 0;
-    }
-
-    const line = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, start.distanceTo(p.pos)), p.owner === "player" ? materials.tracer : materials.hostileTracer);
-    line.position.copy(start).lerp(p.pos, 0.5);
-    line.lookAt(p.pos);
-    impacts.push({ mesh: line, life: 0.045 });
-    scene.add(line);
-
-    if (p.owner === "player") {
-      for (const enemy of enemies) {
-        if (enemy.group.position.distanceTo(p.pos) < p.radius) {
-          enemy.hp -= p.damage;
-          p.pierce -= 1;
-          playSfx("hit", 0.65);
-          burstParticles(enemy.group.position, 0xffd36a, 9, 4.7, 0.052);
-          pulse(enemy.group.position, 0xffd36a);
-          if (p.pierce < 0) p.life = 0;
-        }
-      }
-    } else if (!player.dead && player.invuln <= 0 && player.group.position.distanceTo(p.pos) < p.radius) {
-      player.hp -= Math.max(3, p.damage - player.grit * 0.32);
-      player.sanity -= p.sanity ?? 3;
-      p.life = 0;
-      playSfx("hit", 0.75);
-      burstParticles(player.group.position, 0xb45cff, 10, 4.2, 0.055);
-      pulse(player.group.position, 0xa23cff);
-    }
-
-    if (p.life <= 0) projectiles.splice(i, 1);
-  }
-
-  for (let i = impacts.length - 1; i >= 0; i -= 1) {
-    const impact = impacts[i];
-    impact.life -= dt;
-    if (impact.velocity) {
-      impact.velocity.y -= (impact.gravity ?? 0) * dt;
-      impact.mesh.position.addScaledVector(impact.velocity, dt);
-    }
-    if (impact.spin) {
-      impact.mesh.rotation.x += impact.spin.x * dt;
-      impact.mesh.rotation.y += impact.spin.y * dt;
-      impact.mesh.rotation.z += impact.spin.z * dt;
-    }
-    if (impact.maxLife && impact.mesh.scale) {
-      const fade = THREE.MathUtils.clamp(impact.life / impact.maxLife, 0, 1);
-      impact.mesh.scale.setScalar(Math.max(0.01, fade));
-      if (impact.mesh.material?.opacity !== undefined) impact.mesh.material.opacity = fade * 0.95;
-    }
-    if (impact.life <= 0) {
-      scene.remove(impact.mesh);
-      if (impact.disposeGeometry && impact.mesh.geometry) impact.mesh.geometry.dispose();
-      if (impact.disposeMaterial && impact.mesh.material) impact.mesh.material.dispose();
-      impacts.splice(i, 1);
-    }
-  }
+  projectileSystem.update(gameContext, dt);
 }
 
 function updateRadarBlips() {
@@ -1218,92 +1077,11 @@ function updateEnemyIndicators() {
 }
 
 function pulse(position, color) {
-  const flash = new THREE.PointLight(color, 30, 10, 2);
-  flash.position.copy(position).add(new THREE.Vector3(0, 1.2, 0));
-  scene.add(flash);
-  impacts.push({ mesh: flash, life: 0.08 });
+  effectFactory.pulse(gameContext, position, color);
 }
 
 function updateEnemies(dt) {
-  if (player.dead || !hud.codex.hidden || !hud.controls.hidden) return;
-
-  for (const enemy of enemies) enemy.buffed = 0;
-  for (const spire of enemies) {
-    if (spire.attack !== "aura") continue;
-    for (const enemy of enemies) {
-      if (enemy !== spire && enemy.group.position.distanceTo(spire.group.position) < spire.range) enemy.buffed = 1;
-    }
-  }
-
-  for (let i = enemies.length - 1; i >= 0; i -= 1) {
-    const enemy = enemies[i];
-    enemy.phase += dt;
-    enemy.hitCd = Math.max(0, enemy.hitCd - dt);
-    enemy.cooldown = Math.max(0, enemy.cooldown - dt);
-    enemy.spawnCd = Math.max(0, enemy.spawnCd - dt);
-    enemy.auraFx = Math.max(0, enemy.auraFx - dt);
-    applyGravity(enemy, dt, physics.enemyHeight);
-
-    tmp.copy(player.group.position).sub(enemy.group.position).setY(0);
-    const dist = tmp.length();
-    const dir = tmp.normalize();
-    const speed = enemy.stationary ? 0 : enemy.speed * (enemy.buffed ? 1.28 : 1) * (enemy.mutations.includes("fast") ? 1.35 : 1) * (enemy.mutations.includes("armored") ? 0.82 : 1);
-
-    if (enemy.model) {
-      const faceYaw = Math.atan2(-dir.x, -dir.z);
-      enemy.group.rotation.y = turnToward(enemy.group.rotation.y, faceYaw, Math.min(1, dt * 7));
-      enemy.group.rotation.x = Math.sin(enemy.phase * 3) * 0.045;
-      enemy.visual.position.y = Math.sin(enemy.phase * 4) * 0.12;
-      enemy.visual.rotation.z = Math.sin(enemy.phase * 2.8) * 0.035;
-    } else {
-      enemy.group.rotation.y += dt * (enemy.mutations.includes("frantic") ? 3.4 : 1.7);
-      enemy.group.rotation.x = Math.sin(enemy.phase * 2) * 0.2;
-      enemy.visual.position.y = 0;
-    }
-
-    if (enemy.attack === "laser" && dist < enemy.range) {
-      enemyLaser(enemy, dt);
-    } else if (enemy.attack === "aura") {
-      if (enemy.spawnCd <= 0) enemySpawn(enemy, "skitter", 3);
-      if (enemy.auraFx <= 0) {
-        enemy.auraFx = 0.65;
-        pulse(enemy.group.position, 0x8bff79);
-      }
-    } else if (enemy.attack === "shoot" && dist < enemy.range) {
-      enemy.group.position.addScaledVector(dir, -speed * 0.35 * dt);
-      if (enemy.cooldown <= 0) enemyShoot(enemy, dir);
-    } else if (enemy.attack === "spawn" && dist < enemy.range) {
-      enemy.group.position.addScaledVector(dir, speed * 0.25 * dt);
-      if (enemy.spawnCd <= 0) enemySpawn(enemy);
-    } else if (enemy.attack === "charge" && dist < enemy.range * 4 && enemy.cooldown <= 0) {
-      enemy.group.position.addScaledVector(dir, speed * 4.2 * dt);
-      if (dist < 2.5) enemyMelee(enemy);
-    } else if (dist > enemy.range) {
-      enemy.group.position.addScaledVector(dir, speed * dt);
-    } else {
-      enemyMelee(enemy);
-    }
-    resolveCircleCollision(enemy.group.position, physics.enemyRadius);
-    const px = enemy.group.position.x - player.group.position.x;
-    const pz = enemy.group.position.z - player.group.position.z;
-    const minPlayerDistance = physics.enemyRadius + physics.playerRadius;
-    const playerDistSq = px * px + pz * pz;
-    if (playerDistSq > 0.0001 && playerDistSq < minPlayerDistance * minPlayerDistance) {
-      const playerDist = Math.sqrt(playerDistSq);
-      const push = (minPlayerDistance - playerDist) / playerDist;
-      enemy.group.position.x += px * push * 0.6;
-      enemy.group.position.z += pz * push * 0.6;
-      player.group.position.x -= px * push * 0.2;
-      player.group.position.z -= pz * push * 0.2;
-      resolveCircleCollision(enemy.group.position, physics.enemyRadius);
-      resolveCircleCollision(player.group.position, physics.playerRadius);
-    }
-    enemy.group.position.y = terrainHeight(enemy.group.position.x, enemy.group.position.z) + physics.enemyHeight;
-
-    if (enemy.hp <= 0) killEnemy(i, enemy);
-  }
-
-  if (!player.dead && enemies.length === 0) openPortal();
+  enemyDirector.update(gameContext, dt);
 }
 
 function enemyShoot(enemy, dir) {
@@ -1312,7 +1090,7 @@ function enemyShoot(enemy, dir) {
   playSfx("enemy", enemy.mutations.includes("frantic") ? 1.1 : 0.85);
   muzzleBurst(enemy.group.position.clone().add(new THREE.Vector3(0, 0.8, 0)), dir, 0xb45cff);
   for (let i = 0; i < count; i += 1) {
-    projectiles.push({
+    projectileFactory.create({
       owner: "enemy",
       pos: enemy.group.position.clone().add(new THREE.Vector3(0, 0.8, 0)),
       dir: dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), (i - (count - 1) / 2) * 0.16),
@@ -1332,8 +1110,7 @@ function enemyLaser(enemy, dt) {
   const beam = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, origin.distanceTo(target)), materials.laser);
   beam.position.copy(origin).lerp(target, 0.5);
   beam.lookAt(target);
-  impacts.push({ mesh: beam, life: 0.04 });
-  scene.add(beam);
+  effectFactory.timed(gameContext, { mesh: beam, life: 0.04 });
   enemy.group.lookAt(player.group.position.x, enemy.group.position.y, player.group.position.z);
   if (enemy.laserTick <= 0 && player.invuln <= 0) {
     enemy.laserTick = 0.32;
@@ -1368,8 +1145,7 @@ function enemyMelee(enemy) {
 }
 
 function killEnemy(index, enemy) {
-  scene.remove(enemy.group);
-  enemies.splice(index, 1);
+  entities.removeEnemy(enemy, gameContext);
   player.kills += 1;
   player.goon = Math.min(100, player.goon + 5);
   player.sanity = Math.min(100, player.sanity + 1.5);
@@ -1417,7 +1193,7 @@ function nextLevel() {
   player.hp = Math.min(100, player.hp + 20);
   player.repairKits = Math.min(5, player.repairKits + (wave % 2));
   generateLevel();
-  projectiles.length = 0;
+  entities.clearProjectiles(gameContext);
   spawnWave();
 }
 
@@ -1537,9 +1313,9 @@ function die() {
 
 function restart() {
   clearLock();
-  for (const enemy of enemies.splice(0)) scene.remove(enemy.group);
-  for (const item of impacts.splice(0)) scene.remove(item.mesh);
-  projectiles.length = 0;
+  entities.clearEnemies(gameContext);
+  entities.clearEffects(gameContext);
+  entities.clearProjectiles(gameContext);
   wave = 1;
   Object.assign(player, {
     hp: 100,

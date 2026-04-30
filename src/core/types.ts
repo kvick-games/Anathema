@@ -1,3 +1,8 @@
+import type { EntityManager } from "./gameObject.js";
+import type { TimedEffect } from "../objects/effects.js";
+import type { EnemyEntity } from "../objects/enemies.js";
+import type { ProjectileEntity } from "../objects/projectiles.js";
+
 export type Binding = [string, string];
 
 export interface PhysicsConfig {
@@ -100,9 +105,10 @@ export interface GameState {
   lock: LockState;
   player: PlayerState;
   weapons: Weapon[];
-  enemies: any[];
-  projectiles: any[];
-  impacts: any[];
+  enemies: EnemyEntity[];
+  projectiles: ProjectileEntity[];
+  impacts: TimedEffect[];
+  effects: TimedEffect[];
   levelObjects: any[];
   colliders: any[];
   floorZones: any[];
@@ -125,5 +131,8 @@ export interface GameContext {
   materials: Record<string, any>;
   hud: any;
   audio: any;
+  entities: EntityManager;
+  effectFactory: any;
+  tmpVector: any;
   state: GameState;
 }
