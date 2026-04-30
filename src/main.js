@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { createProceduralMusicManager } from "./musicManager.js";
 
 const canvas = document.querySelector("#game");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -211,6 +212,8 @@ let portal = null;
 let portalActive = false;
 let audioContext = null;
 let audioUnlocked = false;
+let musicManager = null;
+let musicStateKey = "";
 
 const physics = {
   gravity: 34,
@@ -329,6 +332,87 @@ function unlockAudio() {
   audioContext ??= new AudioCtor();
   if (audioContext.state === "suspended") audioContext.resume();
   audioUnlocked = true;
+  startMusic();
+}
+
+function deckMusicName() {
+  if (portalActive) return "victory";
+  if (enemies.length > 0) return player.sanity < 42 || enemies.length > Math.max(4, waveHostileCount * 0.45) ? "combat" : "sanctum";
+  return wave % 3 === 0 ? "sanctum" : "derelict";
+}
+
+function deckMusicSettings() {
+  const expectedHostiles = Math.max(5, waveHostileCount || 5 + Math.floor(wave * 1.8));
+  const pressure = THREE.MathUtils.clamp(enemies.length / expectedHostiles, 0, 1);
+  const lowSanity = THREE.MathUtils.clamp((78 - player.sanity) / 78, 0, 1);
+  const lowHp = THREE.MathUtils.clamp((72 - player.hp) / 72, 0, 1);
+  const deckHeat = THREE.MathUtils.clamp(wave / 9, 0, 1);
+  const actionHeat = input.left || input.right ? 1 : keys.has("ShiftLeft") || keys.has("ShiftRight") ? 0.65 : 0;
+  const goonHeat = THREE.MathUtils.clamp(player.goon / 100, 0, 1);
+  const seedVariance = (Math.sin(levelSeed * 7.31 + wave * 1.73) + 1) * 0.5;
+  const danger = portalActive
+    ? 0.16
+    : THREE.MathUtils.clamp(0.26 + pressure * 0.42 + lowSanity * 0.27 + lowHp * 0.2 + deckHeat * 0.18 + actionHeat * 0.1, 0.18, 0.98);
+
+  return {
+    danger,
+    density: portalActive
+      ? 0.6
+      : THREE.MathUtils.clamp(0.54 + pressure * 0.3 + goonHeat * 0.16 + deckHeat * 0.12 + actionHeat * 0.1, 0.44, 0.98),
+    drive: portalActive
+      ? 0.36
+      : THREE.MathUtils.clamp(0.48 + pressure * 0.34 + goonHeat * 0.2 + actionHeat * 0.18 + deckHeat * 0.1, 0.38, 1),
+    chaos: portalActive
+      ? 0.18
+      : THREE.MathUtils.clamp(0.12 + lowSanity * 0.35 + pressure * 0.2 + deckHeat * 0.16 + seedVariance * 0.14, 0.08, 0.86),
+    brightness: portalActive
+      ? 0.82
+      : THREE.MathUtils.clamp(0.34 + goonHeat * 0.16 + deckHeat * 0.1 + (1 - lowSanity) * 0.12, 0.26, 0.74),
+    bpm: Math.round(portalActive
+      ? 104 + Math.min(18, wave * 2)
+      : enemies.length > 0
+        ? 118 + wave * 4 + pressure * 36 + danger * 20 + actionHeat * 10
+        : 88 + wave * 2.5 + lowSanity * 12),
+    bars: portalActive ? 4 : 8,
+  };
+}
+
+function deckMusicSeed() {
+  return Math.floor(levelSeed * 1000 + wave * 7919 + Math.floor(player.kills / 2) * 313 + Math.floor(player.decay * 10) * 29);
+}
+
+function updateMusic(force = false) {
+  if (!musicManager) return;
+  const palette = deckMusicName();
+  const settings = deckMusicSettings();
+  const stateKey = [
+    palette,
+    wave,
+    Math.floor(enemies.length / 2),
+    Math.floor(player.kills / 3),
+    Math.round(settings.danger * 12),
+    Math.round(settings.density * 12),
+    Math.round(settings.drive * 12),
+    Math.round(settings.chaos * 10),
+    Math.round(settings.bpm / 4),
+    portalActive ? "portal" : "deck",
+  ].join(":");
+  if (!force && stateKey === musicStateKey) return;
+  musicStateKey = stateKey;
+  musicManager.setSeed(deckMusicSeed());
+  musicManager.setPalette(palette, settings);
+}
+
+function startMusic() {
+  if (!audioContext) return;
+  musicManager ??= createProceduralMusicManager({
+    audioContext,
+    seed: deckMusicSeed(),
+    masterVolume: 0.34,
+    palette: deckMusicName(),
+  });
+  updateMusic(true);
+  if (!musicManager.started) musicManager.start().catch(() => {});
 }
 
 function playTone({ frequency = 220, endFrequency = frequency, duration = 0.16, type = "sine", volume = 0.14, delay = 0, filter = null }) {
@@ -849,6 +933,7 @@ function generateLevel() {
   levelSeed += 1 + wave * 0.73;
   scene.fog.density = 0.014 + Math.min(0.018, wave * 0.0015);
   if (hud.deckTitle) hud.deckTitle.textContent = `Deck ${wave - 1}: ${["Impact Scar", "Hangar Basilica", "Reactor Reliquary", "Keel Tomb", "Command Ossuary"][wave % 5]}`;
+  updateMusic(true);
 
   const route = makeRoute();
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(560, 560, 96, 96), materials.moon);
@@ -1102,6 +1187,7 @@ function spawnWave() {
     makeEnemy(safe.x, safe.z, type, wave);
   }
   hud.message.textContent = `Deck ${wave}: follow the route through ${spawnPoints.length} rooms and exterior breaches.`;
+  updateMusic(true);
 }
 
 function playerForward() {
@@ -1708,6 +1794,7 @@ function openPortal() {
   levelCompleteBurst(group.position);
   pulse(group.position, 0x7bd4ff);
   hud.message.textContent = "Deck cleared. The breach portal is open at the far end of the route.";
+  updateMusic(true);
 }
 
 function updatePortal(dt) {
@@ -1835,6 +1922,8 @@ function updateHud() {
 function die() {
   player.dead = true;
   hud.death.hidden = false;
+  musicManager?.stop({ fadeOut: 1.3 });
+  musicStateKey = "";
 }
 
 function restart() {
@@ -1871,6 +1960,7 @@ function restart() {
   hud.death.hidden = true;
   generateLevel();
   spawnWave();
+  startMusic();
 }
 
 function tick() {
@@ -1883,6 +1973,7 @@ function tick() {
   updateEnemyIndicators();
   updateHud();
   updateCollisionDebug();
+  updateMusic();
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
