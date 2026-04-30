@@ -24,8 +24,9 @@
       <div id="lock-status">LOCK: searching</div>
       <div class="bottom-row">
         <div id="weapon">Gunblade: folded</div>
-        <div id="message">Click to lock mouse. H opens the character menu. Movement follows the reference bindings.</div>
+        <div id="message">Click to lock mouse. H opens character. M opens controls.</div>
       </div>
+      <div id="enemy-indicators"></div>
     </div>
     <aside id="codex" class="codex" hidden>
       <div class="codex-panel">
@@ -64,6 +65,31 @@
           <section class="wide">
             <h3>Buffs, Upgrades, and Arsenal</h3>
             <div id="upgrade-log" class="upgrade-log"></div>
+          </section>
+        </div>
+      </div>
+    </aside>
+    <aside id="controls" class="codex" hidden>
+      <div class="codex-panel controls-panel">
+        <div class="codex-head">
+          <div>
+            <span class="kicker">Input Map</span>
+            <h2>Control Scheme</h2>
+          </div>
+          <button id="close-controls" type="button">Close</button>
+        </div>
+        <div class="codex-columns">
+          <section>
+            <h3>Movement</h3>
+            <div class="bind-list" id="controls-movement"></div>
+          </section>
+          <section>
+            <h3>Combat</h3>
+            <div class="bind-list" id="controls-combat"></div>
+          </section>
+          <section class="wide">
+            <h3>Menus and Utility</h3>
+            <div class="bind-list" id="controls-system"></div>
           </section>
         </div>
       </div>

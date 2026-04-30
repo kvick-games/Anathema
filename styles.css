@@ -102,7 +102,8 @@ meter::-webkit-meter-optimum-value {
 }
 
 .stat-grid,
-#lock-status {
+#lock-status,
+#enemy-indicators {
   pointer-events: none;
 }
 
@@ -139,6 +140,39 @@ meter::-webkit-meter-optimum-value {
   color: #ffd36a;
 }
 
+#enemy-indicators {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+}
+
+.enemy-marker {
+  position: absolute;
+  min-width: 28px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 211, 106, 0.65);
+  background: rgba(8, 10, 11, 0.66);
+  color: #ffd36a;
+  display: grid;
+  place-items: center;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 1px 5px #000;
+}
+
+.enemy-marker.locked {
+  border-color: #ffffff;
+  color: #ffffff;
+}
+
+.enemy-marker.elite {
+  border-color: rgba(180, 92, 255, 0.85);
+  color: #e0c2ff;
+}
+
 #weapon,
 #message {
   padding: 9px 11px;
@@ -162,7 +196,8 @@ meter::-webkit-meter-optimum-value {
   background: rgba(0, 0, 0, 0.72);
 }
 
-#close-codex {
+#close-codex,
+#close-controls {
   pointer-events: auto;
   border: 1px solid rgba(211, 229, 239, 0.45);
   background: #243544;
@@ -193,6 +228,10 @@ meter::-webkit-meter-optimum-value {
   border: 1px solid rgba(183, 210, 226, 0.3);
   background: linear-gradient(180deg, rgba(32, 50, 66, 0.97), rgba(13, 21, 29, 0.97));
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.controls-panel {
+  width: min(860px, 94vw);
 }
 
 .codex-head {
