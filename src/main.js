@@ -15,13 +15,27 @@ const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 700);
 const clock = new THREE.Clock();
 
 const hud = {
-  hp: document.querySelector("#hp"),
-  stamina: document.querySelector("#stamina"),
-  sanity: document.querySelector("#sanity"),
-  goon: document.querySelector("#goon"),
+  meters: {
+    hp: document.querySelector("#hp"),
+    stamina: document.querySelector("#stamina"),
+    sanity: document.querySelector("#sanity"),
+    decay: document.querySelector("#decay"),
+    goon: document.querySelector("#goon"),
+  },
+  meterValues: {
+    hp: document.querySelector('[data-value="hp"]'),
+    stamina: document.querySelector('[data-value="stamina"]'),
+    sanity: document.querySelector('[data-value="sanity"]'),
+    decay: document.querySelector('[data-value="decay"]'),
+    goon: document.querySelector('[data-value="goon"]'),
+  },
   stats: document.querySelector("#stats"),
   weapon: document.querySelector("#weapon"),
+  weaponAmmo: document.querySelector("#weapon-ammo"),
+  weaponDetail: document.querySelector("#weapon-detail"),
+  weaponHeat: document.querySelector("#weapon-heat"),
   message: document.querySelector("#message"),
+  routeProgress: document.querySelector("#route-progress"),
   death: document.querySelector("#death"),
   codex: document.querySelector("#codex"),
   controls: document.querySelector("#controls"),
@@ -37,13 +51,26 @@ const hud = {
   equipmentList: document.querySelector("#equipment-list"),
   statusList: document.querySelector("#status-list"),
   upgradeLog: document.querySelector("#upgrade-log"),
-  brand: document.querySelector(".brand strong"),
+  deckTitle: document.querySelector("#deck-title"),
   lockStatus: document.querySelector("#lock-status"),
   lockToggle: document.querySelector("#lock-toggle"),
   debugCollisionToggle: document.querySelector("#debug-collision-toggle"),
   combatHud: document.querySelector("#combat-hud"),
   enemyIndicators: document.querySelector("#enemy-indicators"),
+  radarBlips: document.querySelector("#radar-blips"),
+  quickKitCount: document.querySelector(".quick-slot.active small"),
 };
+
+function setHudBar(element, value, max = 100) {
+  if (!element) return;
+  const pct = max <= 0 ? 0 : THREE.MathUtils.clamp((value / max) * 100, 0, 100);
+  element.style.setProperty("--value", `${pct.toFixed(1)}%`);
+}
+
+function setHudMeter(name, value, max = 100, display = `${Math.floor(value)} / ${max}`) {
+  setHudBar(hud.meters[name], value, max);
+  if (hud.meterValues[name]) hud.meterValues[name].textContent = display;
+}
 
 const keys = new Set();
 const pointer = { locked: false, yaw: 0, pitch: -0.18 };
@@ -179,6 +206,7 @@ const debugCollision = {
 let wave = 1;
 let levelSeed = 1;
 let enemyNameSerial = 1;
+let waveHostileCount = 0;
 let portal = null;
 let portalActive = false;
 let audioContext = null;
@@ -820,7 +848,7 @@ function generateLevel() {
   portalActive = false;
   levelSeed += 1 + wave * 0.73;
   scene.fog.density = 0.014 + Math.min(0.018, wave * 0.0015);
-  hud.brand.textContent = `Deck ${wave - 1}: ${["Impact Scar", "Hangar Basilica", "Reactor Reliquary", "Keel Tomb", "Command Ossuary"][wave % 5]}`;
+  if (hud.deckTitle) hud.deckTitle.textContent = `Deck ${wave - 1}: ${["Impact Scar", "Hangar Basilica", "Reactor Reliquary", "Keel Tomb", "Command Ossuary"][wave % 5]}`;
 
   const route = makeRoute();
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(560, 560, 96, 96), materials.moon);
@@ -1063,8 +1091,8 @@ function randomEnemyMutations(tier) {
 }
 
 function spawnWave() {
-  const types = Object.keys(enemyTypes);
   const count = 5 + Math.floor(wave * 1.8);
+  waveHostileCount = count;
   for (let i = 0; i < count; i += 1) {
     const spawn = spawnPoints[1 + (i % Math.max(1, spawnPoints.length - 1))] ?? spawnPoints[0] ?? { x: 0, z: 0, room: { w: 70, d: 70 } };
     const room = spawn.room ?? { w: 70, d: 70 };
@@ -1380,7 +1408,31 @@ function updateProjectiles(dt) {
   }
 }
 
+function updateRadarBlips() {
+  if (!hud.radarBlips) return;
+  const center = 105.5;
+  const radius = 72;
+  const range = 92;
+  const sin = Math.sin(pointer.yaw);
+  const cos = Math.cos(pointer.yaw);
+
+  hud.radarBlips.innerHTML = enemies.map((enemy) => {
+    const offset = enemy.group.position.clone().sub(player.group.position);
+    const localX = offset.x * cos - offset.z * sin;
+    const localZ = offset.x * sin + offset.z * cos;
+    const distance = Math.hypot(localX, localZ);
+    const amount = Math.min(1, distance / range);
+    const angle = Math.atan2(localX, localZ);
+    const x = center + Math.sin(angle) * radius * amount;
+    const y = center - Math.cos(angle) * radius * amount;
+    const locked = enemy === lock.target ? " locked" : "";
+    const elite = enemy.stationary || enemy.buffed > 0 ? " elite" : "";
+    return `<i class="radar-blip${locked}${elite}" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px"></i>`;
+  }).join("");
+}
+
 function updateEnemyIndicators() {
+  updateRadarBlips();
   if (!hud.enemyIndicators) return;
   hud.enemyIndicators.innerHTML = enemies.map((enemy) => {
     const pos = enemy.group.position.clone().add(new THREE.Vector3(0, 1.2, 0)).project(camera);
@@ -1734,11 +1786,20 @@ function renderCodex() {
 
 function updateHud() {
   const weapon = weapons[player.weaponIndex];
-  hud.hp.value = Math.max(0, player.hp);
-  hud.stamina.value = player.stamina;
-  hud.sanity.value = Math.max(0, player.sanity);
-  hud.goon.value = player.goon;
-  hud.weapon.textContent = `${weapon.name} | ${weapon.mode} | Deck ${wave} | Hostiles ${enemies.length} | ${portalActive ? "Portal open" : "Portal sealed"} | Kits ${player.repairKits}`;
+  setHudMeter("hp", Math.max(0, player.hp), 100, `${Math.max(0, Math.floor(player.hp))} / 100`);
+  setHudMeter("stamina", player.stamina, 100, `${Math.floor(player.stamina)} / 100`);
+  setHudMeter("sanity", Math.max(0, player.sanity), 100, `${Math.max(0, Math.floor(player.sanity))} / 100`);
+  setHudMeter("decay", player.decay, 40, `${player.decay.toFixed(1)}%`);
+  setHudMeter("goon", player.goon, 100, `${Math.floor(player.goon)} / 100`);
+  hud.weapon.textContent = weapon.name;
+  if (hud.weaponAmmo) hud.weaponAmmo.textContent = `${Math.round(weapon.damage)} / ${Math.round(weapon.projectileSpeed)}`;
+  if (hud.weaponDetail) hud.weaponDetail.textContent = `${weapon.mode} | Deck ${wave} | Hostiles ${enemies.length}`;
+  if (hud.weaponHeat) setHudBar(hud.weaponHeat, 100 - player.stamina * 0.55 + (input.left || input.right ? 24 : 0), 100);
+  if (hud.routeProgress) {
+    const defeated = Math.max(0, waveHostileCount - enemies.length);
+    setHudBar(hud.routeProgress, portalActive ? 100 : defeated, Math.max(1, waveHostileCount));
+  }
+  if (hud.quickKitCount) hud.quickKitCount.textContent = player.repairKits;
   const combatRows = [
     ["LMB", weapon.mode === "rifle" ? "Bayonet" : "Left Weapon", player.attackCd],
     ["RMB", weapon.mode === "folded" ? "Gunblade Fire" : weapon.name, player.shotCd],
@@ -1748,24 +1809,26 @@ function updateHud() {
     ["Space", player.grounded ? "Jump Ready" : "Airborne", player.grounded ? 0 : 1],
     ["T", lock.enabled ? "Lock-On On" : "Lock-On Off", 0],
   ];
-  hud.combatHud.innerHTML = combatRows.map(([inputName, label, cd]) => {
-    const ready = cd <= 0;
-    const value = ready ? "READY" : `${cd.toFixed(1)}s`;
-    return `<div class="combat-slot ${ready ? "ready" : "cooling"}"><span class="keycap">${inputName}</span><b>${label}</b><em>${value}</em></div>`;
-  }).join("");
+  if (hud.combatHud) {
+    hud.combatHud.innerHTML = combatRows.map(([inputName, label, cd]) => {
+      const ready = cd <= 0;
+      const value = ready ? "READY" : `${cd.toFixed(1)}s`;
+      return `<div class="combat-slot ${ready ? "ready" : "cooling"}"><span class="keycap">${inputName}</span><b>${label}</b><em>${value}</em></div>`;
+    }).join("");
+  }
   const statPairs = [
-    ["Age", Math.floor(player.age)],
-    ["Decay", player.decay.toFixed(1)],
-    ["Speed", player.speed.toFixed(1)],
-    ["INT", player.int],
-    ["STR", player.str],
-    ["Grit", player.grit],
-    ["Luck", player.luck],
-    ["Kills", player.kills],
-    ["Sanity", Math.floor(player.sanity)],
-    ["Goon", Math.floor(player.goon)],
+    ["AGE", Math.floor(player.age), 80],
+    ["STR", player.str, 40],
+    ["INT", player.int, 40],
+    ["SPD", player.speed.toFixed(1), 24],
+    ["DECAY", player.decay.toFixed(1), 40],
+    ["SANITY", Math.floor(player.sanity), 100],
+    ["GOON", Math.floor(player.goon), 100],
   ];
-  hud.stats.innerHTML = statPairs.map(([k, v]) => `<div>${k}<br><b>${v}</b></div>`).join("");
+  hud.stats.innerHTML = statPairs.map(([k, v, max]) => {
+    const pct = THREE.MathUtils.clamp((Number(v) / max) * 100, 0, 100);
+    return `<div class="stat-row"><span>${k}</span><span class="stat-pips" style="--value:${pct.toFixed(1)}%"></span><b>${v}</b></div>`;
+  }).join("");
   if (!hud.codex.hidden) renderCodex();
 }
 

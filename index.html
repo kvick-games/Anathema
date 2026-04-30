@@ -7,30 +7,133 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div id="hud">
-      <div class="top-row">
-        <div class="brand">
-          <span class="kicker">Moon Grave</span>
-          <strong>Deck 0: Impact Scar</strong>
+    <div id="hud" class="hud-shell">
+      <div class="hud-left-stack">
+        <section class="hud-widget vitals-widget" aria-label="Pilot vitals">
+          <div class="vital-row" data-vital="hp">
+            <span class="atlas-mask atlas-icon icon-hp" aria-hidden="true"></span>
+            <span class="vital-label">HP</span>
+            <div class="hud-meter">
+              <span id="hp" class="hud-meter-fill"></span>
+              <span class="atlas-mask meter-frame" aria-hidden="true"></span>
+            </div>
+            <output class="vital-value" data-value="hp">100 / 100</output>
+          </div>
+          <div class="vital-row" data-vital="stamina">
+            <span class="atlas-mask atlas-icon icon-stamina" aria-hidden="true"></span>
+            <span class="vital-label">ST</span>
+            <div class="hud-meter">
+              <span id="stamina" class="hud-meter-fill"></span>
+              <span class="atlas-mask meter-frame" aria-hidden="true"></span>
+            </div>
+            <output class="vital-value" data-value="stamina">100 / 100</output>
+          </div>
+          <div class="vital-row" data-vital="sanity">
+            <span class="atlas-mask atlas-icon icon-sanity" aria-hidden="true"></span>
+            <span class="vital-label">SAN</span>
+            <div class="hud-meter">
+              <span id="sanity" class="hud-meter-fill"></span>
+              <span class="atlas-mask meter-frame" aria-hidden="true"></span>
+            </div>
+            <output class="vital-value" data-value="sanity">82 / 100</output>
+          </div>
+          <div class="vital-row" data-vital="decay">
+            <span class="atlas-mask atlas-icon icon-decay" aria-hidden="true"></span>
+            <span class="vital-label">DECAY</span>
+            <div class="hud-meter">
+              <span id="decay" class="hud-meter-fill"></span>
+              <span class="atlas-mask meter-frame" aria-hidden="true"></span>
+            </div>
+            <output class="vital-value" data-value="decay">2.0%</output>
+          </div>
+          <div class="vital-row" data-vital="goon">
+            <span class="atlas-mask atlas-icon icon-goon" aria-hidden="true"></span>
+            <span class="vital-label">GOON</span>
+            <div class="hud-meter">
+              <span id="goon" class="hud-meter-fill"></span>
+              <span class="atlas-mask meter-frame" aria-hidden="true"></span>
+            </div>
+            <output class="vital-value" data-value="goon">7 / 100</output>
+          </div>
+        </section>
+
+        <div class="ability-strip" aria-label="Combat functions">
+          <span class="atlas-mask ability-icon icon-repair" title="Repair kit"></span>
+          <span class="atlas-mask ability-icon icon-boost" title="Boost"></span>
+          <span class="atlas-mask ability-icon icon-blade" title="Left hand weapon"></span>
+          <span class="atlas-mask ability-icon icon-scan" title="Scan"></span>
+          <span class="atlas-mask ability-icon icon-purge" title="Purge weapon"></span>
         </div>
-        <div class="meters">
-          <label><span>HP</span><meter id="hp" min="0" max="100" value="100"></meter></label>
-          <label><span>STA</span><meter id="stamina" min="0" max="100" value="100"></meter></label>
-          <label><span>SAN</span><meter id="sanity" min="0" max="100" value="82"></meter></label>
-          <label><span>GOON</span><meter id="goon" min="0" max="100" value="7"></meter></label>
+
+        <section class="hud-widget pilot-card" aria-label="Pilot stats">
+          <div class="panel-heading">
+            <span class="kicker">Moon Grave</span>
+            <strong id="deck-title">Deck 0: Impact Scar</strong>
+          </div>
+          <div class="stat-grid" id="stats"></div>
+        </section>
+      </div>
+
+      <div class="hud-center">
+        <div class="reticle-widget">
+          <span class="atlas-mask reticle-frame" aria-hidden="true"></span>
+          <div id="lock-status">LOCK: searching</div>
+        </div>
+        <div class="hud-controls">
+          <button id="lock-toggle" class="hud-button" type="button">LOCK ON</button>
+          <button id="debug-collision-toggle" class="hud-button off" type="button">COLLISION VIEW</button>
         </div>
       </div>
-      <div class="stat-grid" id="stats"></div>
-      <div class="hud-stack">
-        <button id="lock-toggle" class="hud-button" type="button">LOCK ON</button>
-        <button id="debug-collision-toggle" class="hud-button off" type="button">COLLISION VIEW</button>
-        <div id="lock-status">LOCK: searching</div>
+
+      <div class="hud-right-stack">
+        <section class="hud-widget radar-widget" aria-label="Tactical map">
+          <div class="atlas-sprite radar-frame" aria-hidden="true">
+            <div class="radar-sweep"></div>
+            <div id="radar-blips"></div>
+          </div>
+        </section>
+        <section class="hud-widget weapon-widget" aria-label="Weapon status">
+          <span class="atlas-sprite weapon-frame" aria-hidden="true"></span>
+          <div class="weapon-readout">
+            <div id="weapon-ammo" class="weapon-ammo">30 / 92</div>
+            <div id="weapon" class="weapon-name">Reliquary Gunblade</div>
+            <div id="weapon-detail" class="weapon-detail">folded | Deck 1 | Hostiles 0</div>
+            <div class="heat-row">
+              <span>Blade Heat</span>
+              <div class="heat-meter"><i id="weapon-heat"></i></div>
+            </div>
+          </div>
+        </section>
         <div id="combat-hud"></div>
       </div>
-      <div class="bottom-row">
-        <div id="weapon">Gunblade: folded</div>
+
+      <div class="quick-slots" aria-label="Quick slots">
+        <div class="quick-slot active"><span class="slot-frame"></span><span class="atlas-mask slot-icon icon-repair"></span><b>C</b><small>2</small></div>
+        <div class="quick-slot"><span class="slot-frame"></span><span class="atlas-mask slot-icon icon-scan"></span><b>V</b><small>scan</small></div>
+        <div class="quick-slot"><span class="slot-frame"></span><span class="atlas-mask slot-icon icon-purge"></span><b>P</b><small>purge</small></div>
+        <div class="quick-slot"><span class="slot-frame"></span><span class="atlas-mask slot-icon icon-blade"></span><b>Q</b><small>left</small></div>
+        <div class="quick-slot"><span class="slot-frame"></span><span class="atlas-mask slot-icon icon-boost"></span><b>E</b><small>right</small></div>
+        <div class="quick-slot"><span class="slot-frame"></span><span class="atlas-mask slot-icon icon-goon"></span><b>R</b><small>swap</small></div>
+      </div>
+
+      <div class="route-widget">
+        <span class="atlas-mask route-frame" aria-hidden="true"></span>
+        <div class="route-meter"><i id="route-progress"></i></div>
         <div id="message">Click to lock mouse. H opens character. M opens controls.</div>
       </div>
+
+      <div class="action-diamond" aria-label="Shoulder and hand weapons">
+        <span class="atlas-mask diamond-node diamond-node-top" aria-hidden="true"></span>
+        <span class="atlas-mask diamond-node diamond-node-left" aria-hidden="true"></span>
+        <span class="atlas-mask diamond-node diamond-node-right" aria-hidden="true"></span>
+        <span class="atlas-mask diamond-node diamond-node-bottom" aria-hidden="true"></span>
+        <span class="atlas-mask action-core icon-goon" aria-hidden="true"></span>
+        <span class="action-key action-key-top">Q</span>
+        <span class="action-key action-key-left">LMB</span>
+        <span class="action-key action-key-right">RMB</span>
+        <span class="action-key action-key-bottom">E</span>
+      </div>
+
       <div id="enemy-indicators"></div>
     </div>
     <aside id="codex" class="codex" hidden>
